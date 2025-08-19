@@ -1,1 +1,1 @@
-web: gunicorn jim_server_multiuser:app --bind 0.0.0.0:$PORT
+web: gunicorn jim_coach_web:app --bind 0.0.0.0:$PORT

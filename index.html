@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🧠 Jim Rohn AI Coach</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            color: #333;
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: #666;
+            font-style: italic;
+            font-size: 1.1em;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .api-setup {
+            background: #f8f9fa;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+
+        .api-setup h3 {
+            color: #495057;
+            margin-bottom: 15px;
+        }
+
+        .api-input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+
+        .api-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .chat-container {
+            height: 500px;
+            overflow-y: auto;
+            border: 2px solid #e9ecef;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            background: #f8f9fa;
+        }
+
+        .message {
+            margin-bottom: 20px;
+            padding: 15px;
+            border-radius: 10px;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .user-message {
+            background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+            border-left: 4px solid #2196F3;
+            margin-left: 40px;
+        }
+
+        .jim-message {
+            background: linear-gradient(135deg, #f3e5f5 0%, #e1bee7 100%);
+            border-left: 4px solid #9c27b0;
+            margin-right: 40px;
+        }
+
+        .message-header {
+            font-weight: bold;
+            margin-bottom: 8px;
+            color: #333;
+        }
+
+        .message-content {
+            line-height: 1.6;
+            color: #444;
+        }
+
+        .input-section {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .question-input {
+            flex: 1;
+            padding: 15px;
+            border: 2px solid #dee2e6;
+            border-radius: 10px;
+            font-size: 16px;
+            resize: none;
+            min-height: 50px;
+        }
+
+        .question-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .ask-button {
+            padding: 15px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: bold;
+            transition: transform 0.2s ease;
+            min-width: 120px;
+        }
+
+        .ask-button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .ask-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .stats {
+            text-align: center;
+            color: #666;
+            font-size: 14px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 10px;
+        }
+
+        .loading {
+            display: inline-block;
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .error {
+            color: #dc3545;
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧠 Jim Rohn AI Coach</h1>
+            <p class="subtitle">"Success is neither magical nor mysterious. Success is the natural consequence of consistently applying basic fundamentals."</p>
+        </div>
+
+        <div class="api-setup">
+            <h3>🔑 API Configuration</h3>
+            <input type="password" id="apiKey" class="api-input" placeholder="Enter your OpenAI API Key (starts with sk-...)">
+            <small style="color: #666;">Your API key is stored locally and never sent anywhere except OpenAI. Required for the AI to work.</small>
+        </div>
+
+        <div class="chat-container" id="chatContainer">
+            <div class="message jim-message">
+                <div class="message-header">Jim Rohn:</div>
+                <div class="message-content">Welcome, my friend! I'm here to share wisdom about success, personal development, and achieving your goals. What's on your mind today? What challenge are you facing, or what guidance are you seeking?</div>
+            </div>
+        </div>
+
+        <div class="input-section">
+            <textarea id="questionInput" class="question-input" placeholder="Ask Jim about success, goals, discipline, motivation, relationships, or any life challenge..." rows="2"></textarea>
+            <button id="askButton" class="ask-button" onclick="askJim()">Ask Jim</button>
+        </div>
+
+        <div class="stats">
+            <span id="statusText">Ready to help you grow</span> • Conversations: <span id="conversationCount">0</span>
+        </div>
+    </div>
+
+    <script>
+        let conversationCount = 0;
+
+        // Jim Rohn's system prompt
+        const jimRohnPrompt = `**Persona and Voice**
+
+* **Role**: Assume the persona of a wise, seasoned mentor Jim Rohn— someone who has walked the path and is now here to light the way. Speak with the warmth of a grandfather, the clarity of a teacher, and the confidence of a coach.
+* **Tone**: Encourage and uplift. Infuse your speech with subtle urgency. Be firm when discussing personal responsibility, yet always empathetic and understanding of life's challenges.
+* **Directness**: Speak directly to the listener or reader. Use "you" and "we" to forge connection.
+* **Authenticity**: Keep language grounded and relatable. Avoid academic jargon and overly technical terms.
+
+**Content and Thematic Emphasis**
+
+Always integrate the following **core principles**:
+
+* **Personal Responsibility**: Emphasize that the path begins with individual choice. "If you don't like how things are, change it! You're not a tree."
+* **Self-Development**: Highlight that who you become is more valuable than what you acquire. "Work harder on yourself than you do on your job."
+* **Discipline**: Frame it as the "bridge between goals and accomplishment." Contrast the *pain of discipline* with the *pain of regret*.
+* **Value Creation**: Reinforce that value precedes reward. "Don't wish it was easier. Wish you were better."
+* **Goal Setting**: Describe goals as the blueprint for a better future — more than targets, they are catalysts.
+* **Learning and Action**: Stress the transformation of learning into doing. "Don't let your learning lead to knowledge. Let your learning lead to action."
+* **Association**: Remind users that "You are the average of the five people you spend the most time with."
+
+Use short, vivid **anecdotes** — especially lessons from "my mentor, Mr. Shoaff" — to bring teachings to life.
+
+Instill **urgency**, not panic: "Days are expensive." "Now is the time."
+
+**Language Patterns and Devices**
+
+1. **Common Phrases**:
+   * "Success is nothing more than a few simple disciplines, practiced every day."
+   * "To have more than you've got, become more than you are."
+   * "Success is neither magical nor mysterious."
+   * "Why not you? Why not now?"
+
+2. **Sentence Structure**:
+   * Use a mix of short, punchy statements (e.g., "Everything matters.") and longer, thoughtful explanations.
+   * Introduce ideas with colons: "Let me give you five steps to success:"
+   * Use **rhetorical questions**: "What will you do about it?"
+   * Use **parallel structure**: "Be strong, but not rude. Be kind, but not weak."
+   * Begin sentences with conjunctions: "And so..." "But let me tell you..."
+
+3. **Vocabulary**:
+   * Prioritize: *discipline*, *value*, *action*, *neglect*, *philosophy*, *goals*, *results*, *attitude*, *wisdom*, *basics*, *enterprise*, *prosperity*, *fundamentals*, *challenge*, *opportunity*, *inspiration*, *integrity*.
+   * Use strong verbs: "design your life", "master the basics", "earn your fortune."
+
+4. **Figurative Language**:
+   * Draw from **agriculture** and **nature**: "You reap what you sow." "Tend your garden."
+   * Use memorable analogies: "Discipline is the bridge...", "Set the sail...", "Pennies into fortunes..."
+
+5. **Contrasts and Dichotomies**:
+   * Always highlight key choices: "Pain of discipline or the pain of regret."
+   * "Formal education will make you a living; self-education will make you a fortune."
+
+Your goal is not just to sound like Jim Rohn — but to **think like him**, to *teach* like him, and to help others **become more than they are**, one small daily discipline at a time.`;
+
+        async function askJim() {
+            const apiKey = document.getElementById('apiKey').value.trim();
+            const question = document.getElementById('questionInput').value.trim();
+            const askButton = document.getElementById('askButton');
+            const chatContainer = document.getElementById('chatContainer');
+            const statusText = document.getElementById('statusText');
+
+            // Validation
+            if (!apiKey) {
+                alert('Please enter your OpenAI API key first.');
+                return;
+            }
+
+            if (!question) {
+                alert('Please ask Jim a question.');
+                return;
+            }
+
+            // Add user message
+            addMessage('You', question, 'user-message');
+            
+            // Clear input and disable button
+            document.getElementById('questionInput').value = '';
+            askButton.disabled = true;
+            askButton.innerHTML = '<span class="loading">Jim is thinking...</span>';
+            statusText.textContent = 'Jim is pondering your question';
+
+            // Add loading message
+            const loadingMessage = addMessage('Jim Rohn', 'Let me think about that...', 'jim-message');
+
+            try {
+                const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify({
+                        model: 'gpt-4',
+                        messages: [
+                            {
+                                role: 'system',
+                                content: jimRohnPrompt
+                            },
+                            {
+                                role: 'user',
+                                content: question
+                            }
+                        ],
+                        temperature: 0.7,
+                        max_tokens: 1000
+                    })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error?.message || 'API request failed');
+                }
+
+                const data = await response.json();
+                const jimResponse = data.choices[0].message.content;
+
+                // Remove loading message
+                chatContainer.removeChild(loadingMessage);
+
+                // Add Jim's response
+                addMessage('Jim Rohn', jimResponse, 'jim-message');
+
+                // Update conversation count
+                conversationCount++;
+                document.getElementById('conversationCount').textContent = conversationCount;
+                statusText.textContent = 'Ready to help you grow';
+
+            } catch (error) {
+                console.error('Error:', error);
+                
+                // Remove loading message
+                chatContainer.removeChild(loadingMessage);
+                
+                // Add error message
+                addMessage('Jim Rohn', `I apologize, but I'm having some technical difficulties right now. ${error.message || 'Please try again in a moment.'}`, 'jim-message');
+                statusText.textContent = 'Technical difficulty - please try again';
+            } finally {
+                // Re-enable button
+                askButton.disabled = false;
+                askButton.textContent = 'Ask Jim';
+            }
+        }
+
+        function addMessage(sender, content, className) {
+            const chatContainer = document.getElementById('chatContainer');
+            const message = document.createElement('div');
+            message.className = `message ${className}`;
+            
+            const header = document.createElement('div');
+            header.className = 'message-header';
+            header.textContent = sender + ':';
+            
+            const messageContent = document.createElement('div');
+            messageContent.className = 'message-content';
+            messageContent.textContent = content;
+            
+            message.appendChild(header);
+            message.appendChild(messageContent);
+            chatContainer.appendChild(message);
+            
+            // Scroll to bottom
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            
+            return message;
+        }
+
+        // Allow Enter to send message (with Shift+Enter for new line)
+        document.getElementById('questionInput').addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                askJim();
+            }
+        });
+
+        // Save API key to localStorage
+        document.getElementById('apiKey').addEventListener('input', function(e) {
+            localStorage.setItem('openai_api_key', e.target.value);
+        });
+
+        // Load API key from localStorage
+        window.addEventListener('load', function() {
+            const savedApiKey = localStorage.getItem('openai_api_key');
+            if (savedApiKey) {
+                document.getElementById('apiKey').value = savedApiKey;
+            }
+        });
+    </script>
+</body>
+</html>

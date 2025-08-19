@@ -1,0 +1,7 @@
+#!/bin/bash
+
+# Navigate to the project directory
+cd "/Users/goodin/Desktop/jim"
+
+# Start the Jim Rohn AI Coach
+python3 jim_server_final.py

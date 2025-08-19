@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Jim Rohn Test</title>
+</head>
+<body>
+    <h1>Quick Test</h1>
+    <div id="result"></div>
+    
+    <script>
+        // Test login
+        async function testLogin() {
+            const response = await fetch('http://localhost:5001/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({
+                    username: 'test',
+                    password: 'test'
+                })
+            });
+            
+            const result = await response.json();
+            document.getElementById('result').innerHTML = JSON.stringify(result);
+            
+            if (result.success) {
+                // Try to access chat
+                setTimeout(() => {
+                    window.location.href = 'http://localhost:5001/chat';
+                }, 1000);
+            }
+        }
+        
+        // Auto-run test
+        testLogin();
+    </script>
+</body>
+</html>

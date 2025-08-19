@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test History</title>
+</head>
+<body>
+    <button onclick="testHistory()">Test History</button>
+    <div id="result"></div>
+
+    <script>
+        async function testHistory() {
+            try {
+                const response = await fetch('/history');
+                const data = await response.json();
+                document.getElementById('result').innerHTML = JSON.stringify(data, null, 2);
+            } catch (error) {
+                document.getElementById('result').innerHTML = 'Error: ' + error.message;
+            }
+        }
+    </script>
+</body>
+</html>

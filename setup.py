@@ -1,0 +1,52 @@
+import os
+from pathlib import Path
+
+def setup_jim_rohn_coach():
+    """Initial setup script for the Jim Rohn coaching system."""
+    
+    # Create necessary directories
+    directories = [
+        "./jim_rohn_materials",
+        "./jim_rohn_materials/books",
+        "./jim_rohn_materials/transcripts",
+        "./jim_rohn_materials/seminars",
+        "./jim_knowledge_db",
+        "./conversation_db",
+        "./user_data"
+    ]
+    
+    for dir in directories:
+        Path(dir).mkdir(parents=True, exist_ok=True)
+    
+    # Create environment file template
+    env_template = """# API Keys
+OPENAI_API_KEY=your_openai_key_here
+ELEVENLABS_API_KEY=your_elevenlabs_key_here
+JIM_ROHN_VOICE_ID=your_voice_id_here
+
+# Optional Configuration
+MAX_MEMORY_CONVERSATIONS=100
+KNOWLEDGE_CHUNK_SIZE=1000
+VOICE_MODEL=eleven_monolingual_v1"""
+    
+    if not os.path.exists('.env'):
+        with open('.env', 'w') as f:
+            f.write(env_template.strip())
+        print("Created .env file - please add your API keys")
+    
+    # Create sample prompt template if it doesn't exist
+    if not os.path.exists('jim_rohn_prompt.txt'):
+        with open('jim_rohn_prompt.txt', 'w') as f:
+            f.write("""[Paste your detailed Jim Rohn prompt instructions here]""")
+        print("Created jim_rohn_prompt.txt - please add your prompt")
+    
+    print("""
+    Setup complete! Next steps:
+    1. Add your Jim Rohn materials to ./jim_rohn_materials/
+    2. Update the .env file with your API keys
+    3. Add your prompt to jim_rohn_prompt.txt
+    4. Run: python jim_rohn_system.py
+    """)
+
+if __name__ == "__main__":
+    setup_jim_rohn_coach()
