@@ -1,0 +1,37 @@
+# Environment variables
+.env
+
+# User data (keep private)
+user_data/
+conversation_history.json
+user_profile.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# Database
+*.sqlite3
+jim_knowledge_db/
+conversation_db/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Audio files
+*.mp3
+*.wav

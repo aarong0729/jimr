@@ -1,0 +1,434 @@
+import os
+import json
+from datetime import datetime
+from typing import List, Dict
+from openai import OpenAI
+from elevenlabs import ElevenLabs
+from dotenv import load_dotenv
+
+load_dotenv()
+from langchain_openai import OpenAIEmbeddings
+from langchain_community.vectorstores import Chroma
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain.schema import Document
+import chromadb
+from chromadb.config import Settings
+
+class JimRohnCoach:
+    def __init__(self, knowledge_path: str, user_profile_path: str = "user_profile.json"):
+        """Initialize the Jim Rohn coaching system with RAG and memory."""
+        
+        # API Keys
+        self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.elevenlabs_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
+        self.voice_id = os.getenv("JIM_ROHN_VOICE_ID")
+        
+        # Initialize vector stores
+        self.embeddings = OpenAIEmbeddings()
+        
+        # Main knowledge base (Jim's content)
+        self.knowledge_store = Chroma(
+            collection_name="jim_rohn_knowledge",
+            embedding_function=self.embeddings,
+            persist_directory="./jim_knowledge_db"
+        )
+        
+        # Conversation memory store (your past conversations)
+        self.memory_store = Chroma(
+            collection_name="conversation_memory",
+            embedding_function=self.embeddings,
+            persist_directory="./conversation_db"
+        )
+        
+        # User profile and patterns
+        self.user_profile_path = user_profile_path
+        self.user_profile = self.load_user_profile()
+        
+        # Conversation memory for current session (simplified)
+        self.conversation_history = []
+        
+        # Load Jim Rohn prompt
+        self.base_prompt = self.load_prompt()
+        
+        # Initialize knowledge base if needed
+        if not os.path.exists("./jim_knowledge_db"):
+            self.setup_knowledge_base(knowledge_path)
+    
+    def load_prompt(self) -> str:
+        """Load your detailed Jim Rohn prompt instructions."""
+        # Try to load your custom system prompt first
+        if os.path.exists('System prompt.txt'):
+            with open('System prompt.txt', 'r') as f:
+                return f.read()
+        # Fallback to jim_rohn_prompt.txt
+        elif os.path.exists('jim_rohn_prompt.txt'):
+            with open('jim_rohn_prompt.txt', 'r') as f:
+                return f.read()
+        else:
+            return "You are Jim Rohn, the legendary personal development speaker and mentor."
+    
+    def load_user_profile(self) -> Dict:
+        """Load or create user profile with patterns and history."""
+        if os.path.exists(self.user_profile_path):
+            with open(self.user_profile_path, 'r') as f:
+                return json.load(f)
+        else:
+            return {
+                "name": "",
+                "key_challenges": [],
+                "goals": [],
+                "recurring_themes": [],
+                "growth_areas": [],
+                "strengths": [],
+                "conversation_count": 0,
+                "last_conversation": None,
+                "insights_about_user": [],
+                "jim_recommendations": []
+            }
+    
+    def save_user_profile(self):
+        """Save updated user profile."""
+        with open(self.user_profile_path, 'w') as f:
+            json.dump(self.user_profile, f, indent=2)
+    
+    def setup_knowledge_base(self, knowledge_path: str):
+        """One-time setup to process all Jim Rohn material into vector store."""
+        print("Setting up Jim Rohn knowledge base...")
+        
+        documents = []
+        
+        # Process different types of content
+        for root, dirs, files in os.walk(knowledge_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                
+                if file.endswith('.txt'):
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                        
+                    # Smart splitting based on content type
+                    if "transcript" in file.lower():
+                        # Transcripts split by paragraphs
+                        splitter = RecursiveCharacterTextSplitter(
+                            chunk_size=1500,
+                            chunk_overlap=200,
+                            separators=["\\n\\n", "\\n", ". ", " "]
+                        )
+                    else:
+                        # Books split by smaller chunks
+                        splitter = RecursiveCharacterTextSplitter(
+                            chunk_size=1000,
+                            chunk_overlap=150
+                        )
+                    
+                    chunks = splitter.split_text(content)
+                    
+                    # Add metadata for better retrieval
+                    for chunk in chunks:
+                        documents.append(Document(
+                            page_content=chunk,
+                            metadata={
+                                "source": file,
+                                "type": "transcript" if "transcript" in file.lower() else "book",
+                                "topic": self.extract_topic(file)
+                            }
+                        ))
+        
+        # Create vector store
+        self.knowledge_store = Chroma.from_documents(
+            documents=documents,
+            embedding=self.embeddings,
+            persist_directory="./jim_knowledge_db"
+        )
+        print(f"Knowledge base created with {len(documents)} chunks")
+    
+    def extract_topic(self, filename: str) -> str:
+        """Extract topic from filename for better categorization."""
+        topics_map = {
+            "success": ["success", "achievement", "goals"],
+            "philosophy": ["philosophy", "wisdom", "thinking"],
+            "discipline": ["discipline", "habits", "consistency"],
+            "leadership": ["leadership", "influence", "team"],
+            "wealth": ["wealth", "money", "financial"],
+            "relationships": ["relationships", "people", "communication"],
+            "personal_development": ["growth", "development", "learning"]
+        }
+        
+        filename_lower = filename.lower()
+        for topic, keywords in topics_map.items():
+            if any(keyword in filename_lower for keyword in keywords):
+                return topic
+        return "general"
+    
+    def get_relevant_knowledge(self, situation: str, k: int = 5) -> str:
+        """Retrieve relevant Jim Rohn wisdom for the situation."""
+        
+        # Search main knowledge base
+        knowledge_results = self.knowledge_store.similarity_search(
+            situation, 
+            k=k,
+            filter=None  # Could filter by topic if needed
+        )
+        
+        # Search past conversations for similar situations
+        memory_results = self.memory_store.similarity_search(
+            situation,
+            k=2  # Less weight on past conversations
+        )
+        
+        # Combine results
+        relevant_content = []
+        
+        # Add Jim's wisdom
+        relevant_content.append("=== Relevant Jim Rohn Wisdom ===")
+        for doc in knowledge_results:
+            source = doc.metadata.get('source', 'Unknown')
+            relevant_content.append(f"\\n[From {source}]:\\n{doc.page_content}")
+        
+        # Add relevant past conversations if any
+        if memory_results:
+            relevant_content.append("\\n\\n=== Relevant Past Conversations ===")
+            for doc in memory_results:
+                date = doc.metadata.get('date', 'Unknown date')
+                relevant_content.append(f"\\n[{date}]:\\n{doc.page_content}")
+        
+        return "\\n".join(relevant_content)
+    
+    def analyze_user_patterns(self, situation: str):
+        """Analyze and update user patterns from the conversation."""
+        
+        # Use GPT to extract insights about the user
+        analysis_prompt = f"""
+        Based on this situation the user is sharing: "{situation}"
+        And their profile: {json.dumps(self.user_profile, indent=2)}
+        
+        Extract:
+        1. Any new recurring themes
+        2. Growth areas they need to work on
+        3. Strengths they're displaying
+        4. Key challenges they're facing
+        
+        Return as JSON.
+        """
+        
+        response = self.openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "system", "content": analysis_prompt}],
+            temperature=0.3
+        )
+        
+        try:
+            insights = json.loads(response.choices[0].message.content)
+            
+            # Update user profile with new insights
+            for theme in insights.get("recurring_themes", []):
+                if theme not in self.user_profile["recurring_themes"]:
+                    self.user_profile["recurring_themes"].append(theme)
+            
+            for area in insights.get("growth_areas", []):
+                if area not in self.user_profile["growth_areas"]:
+                    self.user_profile["growth_areas"].append(area)
+            
+            # Keep lists manageable
+            self.user_profile["recurring_themes"] = self.user_profile["recurring_themes"][-10:]
+            self.user_profile["growth_areas"] = self.user_profile["growth_areas"][-10:]
+            
+        except:
+            pass  # Silent fail on analysis
+    
+    def build_contextualized_prompt(self, situation: str, relevant_knowledge: str) -> str:
+        """Build a prompt with full context about the user and relevant knowledge."""
+        
+        # Build user context
+        user_context = f"""
+        === User Profile ===
+        Conversation #{self.user_profile['conversation_count'] + 1}
+        Recurring themes in their life: {', '.join(self.user_profile['recurring_themes'])}
+        Known growth areas: {', '.join(self.user_profile['growth_areas'])}
+        Strengths: {', '.join(self.user_profile['strengths'])}
+        Recent insights about them: {' | '.join(self.user_profile['insights_about_user'][-3:])}
+        """
+        
+        # Get recent conversation summary
+        recent_memory = "\\n".join([f"User: {conv['user']}\\nJim: {conv['jim']}" for conv in self.conversation_history[-3:]])
+        
+        # Build the full prompt
+        full_prompt = f"""
+        {self.base_prompt}
+        
+        {user_context}
+        
+        === Recent Conversation Context ===
+        {recent_memory}
+        
+        === Relevant Jim Rohn Material ===
+        {relevant_knowledge}
+        
+        === Current Situation ===
+        The user is sharing: {situation}
+        
+        As Jim Rohn, provide personalized coaching that:
+        1. Acknowledges any patterns you see from their history
+        2. Draws from the relevant material provided
+        3. Gives specific, actionable advice
+        4. Remembers and references past conversations when relevant
+        5. Challenges them appropriately based on their growth areas
+        """
+        
+        return full_prompt
+    
+    def ask_jim(self, situation: str, voice_response: bool = True) -> Dict:
+        """Main method to get Jim's response with full context."""
+        
+        # Get relevant knowledge
+        relevant_knowledge = self.get_relevant_knowledge(situation)
+        
+        # Build contextualized prompt
+        full_prompt = self.build_contextualized_prompt(situation, relevant_knowledge)
+        
+        # Get Jim's response
+        response = self.openai_client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": full_prompt},
+                {"role": "user", "content": situation}
+            ],
+            temperature=0.7
+        )
+        
+        jim_response = response.choices[0].message.content
+        
+        # Update conversation memory
+        self.conversation_history.append({
+            "user": situation,
+            "jim": jim_response
+        })
+        
+        # Store this conversation in vector memory
+        self.store_conversation(situation, jim_response)
+        
+        # Analyze user patterns
+        self.analyze_user_patterns(situation)
+        
+        # Update user profile
+        self.user_profile["conversation_count"] += 1
+        self.user_profile["last_conversation"] = datetime.now().isoformat()
+        self.save_user_profile()
+        
+        # Generate voice if requested
+        audio_data = None
+        if voice_response and self.voice_id:
+            try:
+                audio_data = self.elevenlabs_client.generate(
+                    text=jim_response,
+                    voice=self.voice_id,
+                    model="eleven_monolingual_v1"
+                )
+            except Exception as e:
+                print(f"Voice generation failed: {e}")
+                audio_data = None
+        
+        return {
+            "text": jim_response,
+            "audio": audio_data,
+            "relevant_sources": [doc.metadata.get('source', '') 
+                               for doc in self.knowledge_store.similarity_search(situation, k=3)],
+            "user_insights": self.user_profile["recurring_themes"]
+        }
+    
+    def store_conversation(self, situation: str, response: str):
+        """Store conversation in vector memory for future reference."""
+        
+        conversation_text = f"""
+        User situation: {situation}
+        
+        Jim's response: {response}
+        """
+        
+        # Create document with metadata
+        doc = Document(
+            page_content=conversation_text,
+            metadata={
+                "date": datetime.now().isoformat(),
+                "topics": self.extract_topics_from_conversation(situation),
+                "type": "conversation"
+            }
+        )
+        
+        # Add to memory store
+        self.memory_store.add_documents([doc])
+    
+    def extract_topics_from_conversation(self, text: str) -> List[str]:
+        """Extract topics from conversation for better retrieval."""
+        # Simple keyword extraction - could be enhanced with NLP
+        topic_keywords = {
+            "goals": ["goal", "achieve", "success", "accomplish"],
+            "discipline": ["discipline", "habit", "consistent", "routine"],
+            "relationships": ["relationship", "people", "friend", "family"],
+            "business": ["business", "work", "career", "job"],
+            "motivation": ["motivated", "inspiration", "energy", "drive"],
+            "fear": ["fear", "afraid", "worried", "anxiety"],
+            "growth": ["grow", "improve", "better", "develop"]
+        }
+        
+        text_lower = text.lower()
+        topics = []
+        
+        for topic, keywords in topic_keywords.items():
+            if any(keyword in text_lower for keyword in keywords):
+                topics.append(topic)
+        
+        return topics
+
+# Web interface with Gradio
+def create_interface():
+    import gradio as gr
+    
+    coach = JimRohnCoach(
+        knowledge_path="./jim_rohn_materials",
+        user_profile_path="./my_profile.json"
+    )
+    
+    def chat_with_jim(situation, voice_enabled):
+        response = coach.ask_jim(situation, voice_response=voice_enabled)
+        
+        # Format sources
+        sources = "\\n".join([f"📚 {src}" for src in response["relevant_sources"][:3]])
+        
+        # Format insights
+        insights = f"🧠 Your patterns: {', '.join(response['user_insights'])}" if response['user_insights'] else ""
+        
+        return (
+            response["text"],
+            response["audio"],
+            sources,
+            insights,
+            f"Conversations: {coach.user_profile['conversation_count']}"
+        )
+    
+    interface = gr.Interface(
+        fn=chat_with_jim,
+        inputs=[
+            gr.Textbox(
+                label="Share your situation with Jim:",
+                placeholder="What's on your mind? What challenge are you facing?",
+                lines=4
+            ),
+            gr.Checkbox(label="Enable Voice Response", value=True)
+        ],
+        outputs=[
+            gr.Textbox(label="Jim's Advice:", lines=10),
+            gr.Audio(label="Jim Speaking:"),
+            gr.Textbox(label="Sources Referenced:"),
+            gr.Textbox(label="Insights About You:"),
+            gr.Textbox(label="Session Info:")
+        ],
+        title="🧠 Personal Jim Rohn Coach (with Memory)",
+        description="Your personal development coach that remembers you and learns your patterns over time."
+    )
+    
+    return interface
+
+if __name__ == "__main__":
+    interface = create_interface()
+    interface.launch(server_name="0.0.0.0", server_port=7860, share=False, debug=True)
