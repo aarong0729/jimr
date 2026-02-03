@@ -15,6 +15,7 @@ from flask import Flask, request, jsonify, render_template_string, session, redi
 from openai import OpenAI
 from dotenv import load_dotenv
 import re
+import traceback
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -312,6 +313,7 @@ class MultiUserJimCoach:
                         return default_profile
             except Exception as e:
                 print(f"Error loading profile: {e}")
+                traceback.print_exc()
                 return default_profile
         else:
             profile_file = f"user_data/{user_id}/profile.json"
@@ -356,6 +358,8 @@ class MultiUserJimCoach:
                         ))
             except Exception as e:
                 print(f"Error saving profile: {e}")
+                traceback.print_exc()
+                raise
         else:
             profile_file = f"user_data/{user_id}/profile.json"
             with open(profile_file, 'w') as f:
@@ -377,12 +381,13 @@ class MultiUserJimCoach:
                         return [{
                             "question": row["question"],
                             "response": row["response"],
-                            "timestamp": row["timestamp"].isoformat(),
-                            "has_audio": row["has_audio"],
-                            "is_favorite": row["is_favorite"]
+                            "timestamp": row["timestamp"].isoformat() if row["timestamp"] else datetime.now().isoformat(),
+                            "has_audio": row["has_audio"] or False,
+                            "is_favorite": row["is_favorite"] or False
                         } for row in rows]
             except Exception as e:
                 print(f"Error loading conversations: {e}")
+                traceback.print_exc()
                 return []
         else:
             conversations_file = f"user_data/{user_id}/conversations.json"
@@ -416,6 +421,8 @@ class MultiUserJimCoach:
                             ))
                 except Exception as e:
                     print(f"Error saving conversation: {e}")
+                    traceback.print_exc()
+                    raise
         else:
             conversations_file = f"user_data/{user_id}/conversations.json"
             with open(conversations_file, 'w') as f:
@@ -425,7 +432,8 @@ class MultiUserJimCoach:
         """Extract and update personal details from conversations."""
         try:
             profile = self.load_user_profile(user_id)
-            
+            updated = False
+
             # Extract name if mentioned
             name_patterns = [
                 r"[Mm]y name is (\w+)",
@@ -433,34 +441,44 @@ class MultiUserJimCoach:
                 r"[Nn]ame: (\w+)",
                 r"[Cc]all me (\w+)"
             ]
-            
+
             for pattern in name_patterns:
                 match = re.search(pattern, question)
                 if match:
                     name = match.group(1).strip()
                     if name and len(name) > 1 and name.isalpha():
                         profile["name"] = name
+                        updated = True
+                        print(f"📝 Extracted name: {name}")
                         break
-            
-            # Extract location if mentioned
+
+            # Extract location if mentioned (more flexible patterns)
             location_patterns = [
                 r"\(([^)]+, [A-Z]{2})\)",  # (City, ST)
-                r"from ([A-Z][a-z]+, [A-Z]{2})",  # from City, ST
-                r"in ([A-Z][a-z]+, [A-Z]{2})"     # in City, ST
+                r"from ([A-Z][a-z]+(?:\s[A-Z][a-z]+)?, [A-Z]{2})",  # from City, ST or from New York, NY
+                r"in ([A-Z][a-z]+(?:\s[A-Z][a-z]+)?, [A-Z]{2})",   # in City, ST
+                r"live in ([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)",  # live in Denver
+                r"from ([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)",     # from Denver
+                r"located in ([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)"  # located in Denver
             ]
-            
+
             for pattern in location_patterns:
                 match = re.search(pattern, question)
                 if match:
                     location = match.group(1).strip()
-                    if location and "," in location:
+                    if location and len(location) > 2:
                         profile["location"] = location
+                        updated = True
+                        print(f"📍 Extracted location: {location}")
                         break
-            
-            self.save_user_profile(user_id, profile)
-                        
+
+            if updated:
+                self.save_user_profile(user_id, profile)
+                print(f"✅ Profile updated for {user_id}: name={profile.get('name')}, location={profile.get('location')}")
+
         except Exception as e:
             print(f"⚠️ Personal detail extraction failed: {e}")
+            traceback.print_exc()
     
     def get_conversation_context(self, user_id: str, current_question: str) -> str:
         """Get relevant context from user's past conversations."""
@@ -584,11 +602,14 @@ class MultiUserJimCoach:
             }
             
         except Exception as e:
+            print(f"Error in ask_jim: {e}")
+            traceback.print_exc()
+            error_msg = str(e) if str(e) else type(e).__name__
             return {
                 "success": False,
-                "error": str(e)
+                "error": error_msg
             }
-    
+
     def clean_text_for_speech(self, text: str) -> str:
         """Clean text for better speech synthesis."""
         # Remove markdown formatting
@@ -726,14 +747,22 @@ def api_ask():
     """API endpoint for asking Jim."""
     if 'user_id' not in session:
         return jsonify({"success": False, "error": "Not authenticated"})
-    
-    data = request.json
-    result = coach.ask_jim(
-        session['user_id'],
-        data['question'],
-        data.get('generate_voice', False)
-    )
-    return jsonify(result)
+
+    try:
+        data = request.json
+        if not data or 'question' not in data:
+            return jsonify({"success": False, "error": "Question is required"})
+
+        result = coach.ask_jim(
+            session['user_id'],
+            data['question'],
+            data.get('generate_voice', False)
+        )
+        return jsonify(result)
+    except Exception as e:
+        print(f"Error in /api/ask: {e}")
+        traceback.print_exc()
+        return jsonify({"success": False, "error": f"Server error: {str(e)}"})
 
 @app.route('/api/history')
 def api_history():
@@ -791,8 +820,14 @@ def api_profile():
     if 'user_id' not in session:
         return jsonify({"success": False, "error": "Not authenticated"})
 
-    profile = coach.load_user_profile(session['user_id'])
-    return jsonify({"success": True, "profile": profile})
+    try:
+        profile = coach.load_user_profile(session['user_id'])
+        print(f"Profile loaded for {session['user_id']}: {profile}")  # Debug logging
+        return jsonify({"success": True, "profile": profile})
+    except Exception as e:
+        print(f"Error in /api/profile: {e}")
+        traceback.print_exc()
+        return jsonify({"success": False, "error": f"Error loading profile: {str(e)}"})
 
 @app.route('/admin')
 def admin_dashboard():
