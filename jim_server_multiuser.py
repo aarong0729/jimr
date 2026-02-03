@@ -6,9 +6,10 @@ Supports multiple users with individual profiles and shared knowledge base
 
 import os
 import json
-import hashlib
 import secrets
-from datetime import datetime, timedelta
+import base64
+import bcrypt
+from datetime import datetime
 from typing import Dict, List, Optional
 from flask import Flask, request, jsonify, render_template_string, session, redirect, url_for, send_file
 from openai import OpenAI
@@ -18,28 +19,41 @@ from pathlib import Path
 
 load_dotenv()
 
+# Validate required environment variables
+def validate_env():
+    required = ["OPENAI_API_KEY"]
+    missing = [var for var in required if not os.getenv(var)]
+    if missing:
+        raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+
+    # Warn about insecure defaults
+    if not os.getenv("SECRET_KEY"):
+        print("⚠️  WARNING: SECRET_KEY not set. Using insecure default.")
+    if not os.getenv("ADMIN_PASSWORD"):
+        print("⚠️  WARNING: ADMIN_PASSWORD not set. Using insecure default.")
+
+validate_env()
+
+
 class MultiUserJimCoach:
     def __init__(self):
         """Initialize the multi-user Jim Rohn coaching system."""
         self.openai_client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        
+
         # Create directories
         os.makedirs("user_data", exist_ok=True)
         os.makedirs("user_data/shared", exist_ok=True)
-        
+
         # Load admin config
-        self.admin_password = os.getenv("ADMIN_PASSWORD", "admin123")  # Change this!
+        self.admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
         
         # Load system prompt
         try:
             with open('System prompt.txt', 'r') as f:
                 self.system_prompt = f.read()
         except FileNotFoundError:
-            self.system_prompt = """You are Jim Rohn, the legendary personal development speaker and mentor. 
+            self.system_prompt = """You are Jim Rohn, the legendary personal development speaker and mentor.
             Respond with wisdom, warmth, and practical advice in your distinctive style."""
-        
-        # User sessions (in production, use Redis)
-        self.active_sessions = {}
         
     def create_user_account(self, username: str, email: str, password: str) -> Dict:
         """Create a new user account."""
@@ -60,9 +74,9 @@ class MultiUserJimCoach:
         if username in users:
             return {"success": False, "message": "Username already exists"}
         
-        # Create user
+        # Create user with bcrypt hashed password
         user_id = f"user_{secrets.token_hex(8)}"
-        password_hash = hashlib.sha256(password.encode()).hexdigest()
+        password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode('utf-8')
         
         users[username] = {
             "user_id": user_id,
@@ -106,26 +120,39 @@ class MultiUserJimCoach:
     
     def authenticate_user(self, username: str, password: str) -> Optional[str]:
         """Authenticate user and return user_id if successful."""
-        # Clean input
         username = username.strip()
-        
         users_file = "user_data/users.json"
-        
+
         if not os.path.exists(users_file):
             return None
-        
+
         with open(users_file, 'r') as f:
             users = json.load(f)
-        
+
         if username not in users:
             return None
-        
+
         user = users[username]
-        password_hash = hashlib.sha256(password.encode()).hexdigest()
-        
-        if user["password_hash"] == password_hash and user["is_active"]:
-            return user["user_id"]
-        
+        if not user["is_active"]:
+            return None
+
+        stored_hash = user["password_hash"]
+
+        # Try bcrypt first (new format)
+        if stored_hash.startswith('$2'):
+            if bcrypt.checkpw(password.encode(), stored_hash.encode()):
+                return user["user_id"]
+        else:
+            # Legacy SHA-256 hash - verify and upgrade to bcrypt
+            import hashlib
+            if stored_hash == hashlib.sha256(password.encode()).hexdigest():
+                # Upgrade to bcrypt
+                new_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode('utf-8')
+                users[username]["password_hash"] = new_hash
+                with open(users_file, 'w') as f:
+                    json.dump(users, f, indent=2)
+                return user["user_id"]
+
         return None
     
     def load_user_profile(self, user_id: str) -> Dict:
@@ -271,7 +298,7 @@ class MultiUserJimCoach:
                 enhanced_prompt += f"\n\n=== MEMORY CONTEXT ===\n{context}\n\nUse this context to provide more personalized advice. Reference past conversations when relevant, but don't make it obvious unless it naturally fits the conversation."
             
             response = self.openai_client.chat.completions.create(
-                model="gpt-4",
+                model="gpt-4o",
                 messages=[
                     {"role": "system", "content": enhanced_prompt},
                     {"role": "user", "content": question}
@@ -331,7 +358,7 @@ class MultiUserJimCoach:
             return {
                 "success": True,
                 "response": jim_response,
-                "audio": audio_data,
+                "audio": base64.b64encode(audio_data).decode('utf-8') if audio_data else None,
                 "timestamp": conversation["timestamp"]
             }
             
@@ -385,7 +412,27 @@ class MultiUserJimCoach:
 # Flask app setup
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "change-this-secret-key-in-production")
+
+# Production session settings
+app.config.update(
+    SESSION_COOKIE_SECURE=os.getenv("FLASK_ENV") == "production",
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    PERMANENT_SESSION_LIFETIME=86400 * 7  # 7 days
+)
+
 coach = MultiUserJimCoach()
+
+
+@app.route('/health')
+def health_check():
+    """Health check endpoint for monitoring."""
+    return jsonify({
+        "status": "healthy",
+        "service": "jim-rohn-coach",
+        "version": "2.0"
+    })
+
 
 @app.route('/')
 def home():
@@ -428,12 +475,8 @@ def logout():
 @app.route('/chat')
 def chat():
     """Chat interface for logged-in users."""
-    print(f"Chat route - Session contents: {dict(session)}")
     if 'user_id' not in session:
-        print("No user_id in session, redirecting to home")
         return redirect(url_for('home'))
-    
-    print(f"User {session.get('username')} accessing chat")
     return render_template_string(CHAT_TEMPLATE)
 
 @app.route('/api/ask', methods=['POST'])
@@ -455,22 +498,45 @@ def api_history():
     """Get user's conversation history."""
     if 'user_id' not in session:
         return jsonify({"success": False, "error": "Not authenticated"})
-    
+
     conversations = coach.load_user_conversations(session['user_id'])
     return jsonify({"success": True, "conversations": conversations})
+
+@app.route('/api/favorite', methods=['POST'])
+def api_toggle_favorite():
+    """Toggle favorite status on a conversation."""
+    if 'user_id' not in session:
+        return jsonify({"success": False, "error": "Not authenticated"})
+
+    data = request.json
+    timestamp = data.get('timestamp')
+    if not timestamp:
+        return jsonify({"success": False, "error": "Timestamp required"})
+
+    conversations = coach.load_user_conversations(session['user_id'])
+
+    # Find and toggle the conversation
+    for conv in conversations:
+        if conv.get('timestamp') == timestamp:
+            conv['is_favorite'] = not conv.get('is_favorite', False)
+            coach.save_user_conversations(session['user_id'], conversations)
+            return jsonify({"success": True, "is_favorite": conv['is_favorite']})
+
+    return jsonify({"success": False, "error": "Conversation not found"})
 
 @app.route('/admin')
 def admin_dashboard():
     """Admin dashboard."""
     return render_template_string(ADMIN_TEMPLATE)
 
-@app.route('/admin/stats')
+@app.route('/admin/stats', methods=['POST'])
 def admin_stats():
     """Get admin statistics."""
-    password = request.args.get('password')
+    data = request.get_json() or {}
+    password = data.get('password') or request.form.get('password')
     if password != coach.admin_password:
         return jsonify({"error": "Invalid admin password"})
-    
+
     stats = coach.get_admin_stats()
     return jsonify(stats)
 
@@ -657,6 +723,58 @@ CHAT_TEMPLATE = """
         .sidebar-subtitle {
             color: #8b949e;
             font-size: 0.85em;
+        }
+
+        .sidebar-filters {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .filter-btn {
+            padding: 6px 12px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            background: transparent;
+            color: #a1a1aa;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+
+        .filter-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #f4f4f5;
+        }
+
+        .filter-btn.active {
+            background: rgba(6, 182, 212, 0.2);
+            border-color: rgba(6, 182, 212, 0.4);
+            color: #a5f3fc;
+        }
+
+        .favorite-toggle {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            opacity: 0.4;
+            transition: all 0.2s ease;
+            padding: 4px;
+        }
+
+        .favorite-toggle:hover {
+            opacity: 1;
+            transform: translateY(-50%) scale(1.2);
+        }
+
+        .favorite-toggle.active {
+            opacity: 1;
         }
 
         .conversation-list {
@@ -1162,6 +1280,29 @@ CHAT_TEMPLATE = """
             font-size: 12px;
             color: #8b949e;
             margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .history-fav-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            opacity: 0.5;
+            transition: all 0.2s ease;
+        }
+
+        .history-fav-btn:hover {
+            opacity: 1;
+            background: rgba(255, 215, 0, 0.1);
+        }
+
+        .history-fav-btn.active {
+            opacity: 1;
         }
 
         .history-question {
@@ -1285,16 +1426,19 @@ CHAT_TEMPLATE = """
         <div class="sidebar">
             <div class="sidebar-header">
                 <div class="sidebar-title">Recent Conversations</div>
-                <div class="sidebar-subtitle">Quick access to your journey</div>
+                <div class="sidebar-filters">
+                    <button class="filter-btn active" id="filterAll" onclick="setFilter('all')">All</button>
+                    <button class="filter-btn" id="filterFavorites" onclick="setFilter('favorites')">⭐ Favorites</button>
+                </div>
             </div>
-            
+
             <div class="conversation-list" id="recentConversations">
                 <div class="conversation-item">
                     <div class="conversation-question">Loading recent conversations...</div>
                     <div class="conversation-meta">Just now</div>
                 </div>
             </div>
-            
+
             <div class="sidebar-footer">
                 <button class="view-more-btn" onclick="showHistory()">View All History</button>
             </div>
@@ -1400,6 +1544,37 @@ CHAT_TEMPLATE = """
         let isRecording = false;
         let voiceEnabled = true;
         let audioUnlocked = false;
+        let currentFilter = 'all';
+        let allConversations = [];
+
+        // Set filter for sidebar
+        function setFilter(filter) {
+            currentFilter = filter;
+            document.getElementById('filterAll').classList.toggle('active', filter === 'all');
+            document.getElementById('filterFavorites').classList.toggle('active', filter === 'favorites');
+            loadRecentConversations(allConversations);
+        }
+
+        // Toggle favorite status
+        async function toggleFavorite(timestamp, event) {
+            event.stopPropagation();
+            try {
+                const response = await fetch('/api/favorite', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ timestamp: timestamp })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    // Update local data
+                    const conv = allConversations.find(c => c.timestamp === timestamp);
+                    if (conv) conv.is_favorite = data.is_favorite;
+                    loadRecentConversations(allConversations);
+                }
+            } catch (error) {
+                console.error('Failed to toggle favorite:', error);
+            }
+        }
 
         // Load conversation count and recent conversations
         async function loadConversationCount() {
@@ -1407,11 +1582,12 @@ CHAT_TEMPLATE = """
                 const response = await fetch('/api/history');
                 const data = await response.json();
                 if (data.success) {
-                    conversationCount = data.conversations.length || 0;
+                    allConversations = data.conversations || [];
+                    conversationCount = allConversations.length;
                     document.getElementById('conversationCount').textContent = conversationCount;
-                    
+
                     // Populate sidebar with recent conversations
-                    loadRecentConversations(data.conversations || []);
+                    loadRecentConversations(allConversations);
                 }
             } catch (error) {
                 console.warn('Failed to load conversation count:', error);
@@ -1426,27 +1602,40 @@ CHAT_TEMPLATE = """
                 return;
             }
 
-            // Sort by timestamp (newest first) and take last 10
-            const recent = conversations
-                .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-                .slice(0, 10);
+            // Filter by favorites if needed
+            let filtered = conversations;
+            if (currentFilter === 'favorites') {
+                filtered = conversations.filter(c => c.is_favorite);
+                if (filtered.length === 0) {
+                    container.innerHTML = '<div class="conversation-item"><div class="conversation-question">No favorites yet</div><div class="conversation-meta">Click ⭐ to add favorites</div></div>';
+                    return;
+                }
+            }
+
+            // Sort: favorites first, then by timestamp (newest first)
+            const recent = filtered
+                .sort((a, b) => {
+                    if (a.is_favorite && !b.is_favorite) return -1;
+                    if (!a.is_favorite && b.is_favorite) return 1;
+                    return new Date(b.timestamp) - new Date(a.timestamp);
+                })
+                .slice(0, 15);
 
             let html = '';
             recent.forEach((conv, index) => {
                 const date = new Date(conv.timestamp);
                 const timeAgo = getTimeAgo(date);
-                const truncatedQuestion = conv.question.length > 60 
-                    ? conv.question.substring(0, 60) + '...'
+                const truncatedQuestion = conv.question.length > 50
+                    ? conv.question.substring(0, 50) + '...'
                     : conv.question;
-                
+                const isFav = conv.is_favorite ? 'active' : '';
+                const starIcon = conv.is_favorite ? '⭐' : '☆';
+
                 html += `<div class="conversation-item" onclick="openConversationInHistory('${conv.timestamp}')">`;
+                html += `<button class="favorite-toggle ${isFav}" onclick="toggleFavorite('${conv.timestamp}', event)" title="Toggle favorite">${starIcon}</button>`;
                 html += `<div class="conversation-question">${truncatedQuestion}</div>`;
-                html += `<div class="conversation-meta">`;
-                html += `${timeAgo}`;
-                if (conv.is_favorite) {
-                    html += ` <span class="conversation-star">⭐</span>`;
-                }
-                html += `</div></div>`;
+                html += `<div class="conversation-meta">${timeAgo}</div>`;
+                html += `</div>`;
             });
 
             container.innerHTML = html;
@@ -1587,11 +1776,13 @@ CHAT_TEMPLATE = """
                             const isLong = conversation.response.length > 200;
                             const truncatedResponse = isLong ? conversation.response.substring(0, 200) : conversation.response;
                             const isFavorite = conversation.is_favorite || false;
-                            const favoriteClass = isFavorite ? 'favorites-only' : 'all-conversations';
-                            
-                            html += `<div class="history-conversation ${favoriteClass}" onclick="toggleConversation(${index})">`;
-                            html += `<div class="history-timestamp">${date}`;
-                            
+                            const starIcon = isFavorite ? '⭐' : '☆';
+                            const favClass = isFavorite ? 'active' : '';
+
+                            html += `<div class="history-conversation" onclick="toggleConversation(${index})">`;
+                            html += `<div class="history-timestamp">`;
+                            html += `<button class="history-fav-btn ${favClass}" onclick="toggleHistoryFavorite('${conversation.timestamp}', ${index}, event)">${starIcon}</button>`;
+                            html += `${date}`;
                             if (isLong) {
                                 html += `<span class="expand-indicator" id="indicator-${index}">▼ Click to expand</span>`;
                             }
@@ -1644,6 +1835,35 @@ CHAT_TEMPLATE = """
                 if (indicator) {
                     indicator.textContent = '▲ Click to collapse';
                 }
+            }
+        }
+
+        // Toggle favorite from history modal
+        async function toggleHistoryFavorite(timestamp, index, event) {
+            event.stopPropagation();
+            try {
+                const response = await fetch('/api/favorite', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ timestamp: timestamp })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    // Update button appearance
+                    const btn = event.target;
+                    btn.textContent = data.is_favorite ? '⭐' : '☆';
+                    btn.classList.toggle('active', data.is_favorite);
+                    // Update local data
+                    if (conversationsData[index]) {
+                        conversationsData[index].is_favorite = data.is_favorite;
+                    }
+                    // Also update allConversations for sidebar
+                    const conv = allConversations.find(c => c.timestamp === timestamp);
+                    if (conv) conv.is_favorite = data.is_favorite;
+                    loadRecentConversations(allConversations);
+                }
+            } catch (error) {
+                console.error('Failed to toggle favorite:', error);
             }
         }
 
@@ -1974,7 +2194,11 @@ ADMIN_TEMPLATE = """
         <script>
             async function loadStats() {
                 const password = document.getElementById('adminPassword').value;
-                const response = await fetch(`/admin/stats?password=${password}`);
+                const response = await fetch('/admin/stats', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: password })
+                });
                 const result = await response.json();
                 
                 if (result.error) {
