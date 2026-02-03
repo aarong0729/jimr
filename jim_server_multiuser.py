@@ -406,7 +406,6 @@ class MultiUserJimCoach:
                             cur.execute("""
                                 INSERT INTO conversations (user_id, question, response, timestamp, has_audio, is_favorite)
                                 VALUES (%s, %s, %s, %s, %s, %s)
-                                ON CONFLICT DO NOTHING
                             """, (
                                 user_id,
                                 conv["question"],
