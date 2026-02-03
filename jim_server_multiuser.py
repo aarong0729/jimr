@@ -1576,6 +1576,12 @@ CHAT_TEMPLATE = """
             background: rgba(113, 118, 129, 0.3);
         }
 
+        .input-actions {
+            display: flex;
+            gap: 10px;
+            align-items: stretch;
+        }
+
         .stats {
             display: flex;
             align-items: center;
@@ -1779,25 +1785,333 @@ CHAT_TEMPLATE = """
         }
 
         /* Responsive Design */
+        /* Mobile Menu Button */
+        .mobile-menu-btn {
+            display: none;
+            background: rgba(39, 39, 42, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 10px;
+            padding: 10px 12px;
+            cursor: pointer;
+            color: #f4f4f5;
+            font-size: 18px;
+            transition: all 0.2s ease;
+        }
+
+        .mobile-menu-btn:hover {
+            background: rgba(39, 39, 42, 0.9);
+        }
+
+        .mobile-menu-btn .bar {
+            display: block;
+            width: 20px;
+            height: 2px;
+            background: #f4f4f5;
+            margin: 4px 0;
+            border-radius: 2px;
+            transition: all 0.3s ease;
+        }
+
+        /* Mobile Drawer Menu */
+        .mobile-drawer {
+            display: none;
+            position: fixed;
+            top: 0;
+            right: -280px;
+            width: 280px;
+            height: 100vh;
+            background: rgba(22, 27, 34, 0.98);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            z-index: 1001;
+            transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border-left: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: -10px 0 40px rgba(0, 0, 0, 0.5);
+        }
+
+        .mobile-drawer.open {
+            right: 0;
+        }
+
+        .mobile-drawer-header {
+            padding: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .mobile-drawer-title {
+            color: #f4f4f5;
+            font-size: 1.1em;
+            font-weight: 600;
+        }
+
+        .mobile-drawer-close {
+            background: none;
+            border: none;
+            color: #8b949e;
+            font-size: 24px;
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 8px;
+            transition: all 0.2s ease;
+        }
+
+        .mobile-drawer-close:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #f4f4f5;
+        }
+
+        .mobile-drawer-content {
+            padding: 16px;
+        }
+
+        .mobile-menu-item {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 16px;
+            margin-bottom: 8px;
+            background: rgba(39, 39, 42, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            color: #f4f4f5;
+            text-decoration: none;
+            font-size: 15px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .mobile-menu-item:hover {
+            background: rgba(39, 39, 42, 0.7);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .mobile-menu-item.memory-item {
+            border-color: rgba(59, 130, 246, 0.3);
+        }
+
+        .mobile-menu-item.memory-item:hover {
+            background: rgba(59, 130, 246, 0.15);
+            border-color: rgba(59, 130, 246, 0.5);
+        }
+
+        .mobile-menu-item.history-item {
+            border-color: rgba(6, 182, 212, 0.3);
+        }
+
+        .mobile-menu-item.history-item:hover {
+            background: rgba(6, 182, 212, 0.15);
+            border-color: rgba(6, 182, 212, 0.5);
+        }
+
+        .mobile-menu-item.logout-item {
+            border-color: rgba(220, 53, 69, 0.3);
+            color: #f87171;
+        }
+
+        .mobile-menu-item.logout-item:hover {
+            background: rgba(220, 53, 69, 0.15);
+            border-color: rgba(220, 53, 69, 0.5);
+        }
+
+        .mobile-menu-icon {
+            font-size: 20px;
+            width: 24px;
+            text-align: center;
+        }
+
+        .mobile-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 1000;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .mobile-overlay.visible {
+            opacity: 1;
+        }
+
+        /* Mobile Responsive Styles */
         @media (max-width: 768px) {
             .sidebar {
-                width: 250px;
+                display: none;
             }
-            
+
+            .mobile-menu-btn {
+                display: block;
+            }
+
+            .mobile-drawer {
+                display: block;
+            }
+
+            .header-buttons {
+                display: none;
+            }
+
+            .app-container {
+                flex-direction: column;
+            }
+
             .main-header {
-                padding: 15px 20px;
+                padding: 12px 16px;
+                flex-wrap: wrap;
+                gap: 8px;
             }
-            
+
+            .header-info {
+                flex: 1;
+                min-width: 0;
+            }
+
             .main-title {
-                font-size: 1.5em;
+                font-size: 1.25em;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
             }
-            
+
+            .main-subtitle {
+                font-size: 0.8em;
+                display: -webkit-box;
+                -webkit-line-clamp: 2;
+                -webkit-box-orient: vertical;
+                overflow: hidden;
+            }
+
             .chat-container {
-                padding: 15px 20px;
+                margin: 8px 12px;
+                padding: 12px;
+                border-radius: 12px;
             }
-            
+
+            .message {
+                padding: 12px 14px;
+                margin-bottom: 12px;
+            }
+
+            .user-message {
+                margin-left: 12px;
+            }
+
+            .jim-message {
+                margin-right: 12px;
+            }
+
+            /* Mobile Input Section - Redesigned */
             .input-section {
-                padding: 15px 20px;
+                margin: 8px 12px 16px 12px;
+                padding: 14px;
+                border-radius: 14px;
+            }
+
+            .voice-controls-row {
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-bottom: 12px;
+            }
+
+            .voice-controls {
+                flex: 1;
+                justify-content: flex-start;
+            }
+
+            .input-row {
+                flex-direction: column;
+                gap: 12px;
+            }
+
+            .question-input {
+                width: 100%;
+                min-height: 80px;
+                padding: 14px;
+                font-size: 16px;
+                border-radius: 14px;
+                line-height: 1.5;
+            }
+
+            .input-actions {
+                display: flex;
+                gap: 10px;
+                width: 100%;
+            }
+
+            .mic-button {
+                width: 48px;
+                height: 48px;
+                border-radius: 14px;
+                flex-shrink: 0;
+            }
+
+            .ask-button {
+                flex: 1;
+                padding: 14px 20px;
+                font-size: 15px;
+                border-radius: 14px;
+                justify-content: center;
+            }
+
+            .stats {
+                flex-direction: column;
+                gap: 8px;
+                align-items: flex-start;
+            }
+
+            .status-info {
+                flex-wrap: wrap;
+                gap: 10px;
+            }
+
+            /* Modal adjustments for mobile */
+            .modal-content {
+                margin: 0;
+                width: 100%;
+                height: 100%;
+                max-height: 100%;
+                border-radius: 0;
+            }
+
+            .profile-stats {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 10px;
+            }
+
+            .stat-card {
+                padding: 12px;
+            }
+
+            .stat-number {
+                font-size: 1.4em;
+            }
+        }
+
+        /* Small mobile devices */
+        @media (max-width: 380px) {
+            .main-title {
+                font-size: 1.1em;
+            }
+
+            .question-input {
+                min-height: 70px;
+                font-size: 15px;
+            }
+
+            .voice-button {
+                padding: 5px 8px;
+                font-size: 11px;
+            }
+
+            .voice-label {
+                font-size: 11px;
             }
         }
 
@@ -1853,13 +2167,42 @@ CHAT_TEMPLATE = """
         <!-- Main Content -->
         <div class="main-content">
             <div class="main-header">
-                <div>
+                <div class="header-info">
                     <div class="main-title">Jim Rohn AI Coach</div>
                     <div class="main-subtitle">"Success is neither magical nor mysterious. Success is the natural consequence of consistently applying basic fundamentals."</div>
                 </div>
                 <div class="header-buttons">
                     <button class="memory-btn" onclick="showProfile()">🧠 My Memory</button>
                     <a href="/logout" class="logout-btn">Logout</a>
+                </div>
+                <!-- Mobile Menu Button -->
+                <button class="mobile-menu-btn" onclick="toggleMobileMenu()" aria-label="Menu">
+                    <span class="bar"></span>
+                    <span class="bar"></span>
+                    <span class="bar"></span>
+                </button>
+            </div>
+
+            <!-- Mobile Drawer Menu -->
+            <div class="mobile-overlay" id="mobileOverlay" onclick="closeMobileMenu()"></div>
+            <div class="mobile-drawer" id="mobileDrawer">
+                <div class="mobile-drawer-header">
+                    <span class="mobile-drawer-title">Menu</span>
+                    <button class="mobile-drawer-close" onclick="closeMobileMenu()">&times;</button>
+                </div>
+                <div class="mobile-drawer-content">
+                    <div class="mobile-menu-item memory-item" onclick="showProfile(); closeMobileMenu();">
+                        <span class="mobile-menu-icon">🧠</span>
+                        <span>My Memory</span>
+                    </div>
+                    <div class="mobile-menu-item history-item" onclick="showHistory(); closeMobileMenu();">
+                        <span class="mobile-menu-icon">📜</span>
+                        <span>Conversation History</span>
+                    </div>
+                    <a href="/logout" class="mobile-menu-item logout-item">
+                        <span class="mobile-menu-icon">🚪</span>
+                        <span>Logout</span>
+                    </a>
                 </div>
             </div>
 
@@ -1906,21 +2249,23 @@ CHAT_TEMPLATE = """
 
                 <div class="input-row">
                     <textarea id="questionInput" class="question-input" placeholder="Ask Jim about success, goals, discipline, motivation, relationships, or any life challenge..." rows="3"></textarea>
-                    <button id="micButton" class="mic-button" onclick="toggleSpeechRecognition()" title="Click to speak your question">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
-                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-                            <line x1="12" y1="19" x2="12" y2="23"></line>
-                            <line x1="8" y1="23" x2="16" y2="23"></line>
-                        </svg>
-                    </button>
-                    <button id="askButton" class="ask-button" onclick="askJim()">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <line x1="22" y1="2" x2="11" y2="13"></line>
-                            <polygon points="22,2 15,22 11,13 2,9 22,2"></polygon>
-                        </svg>
-                        Send
-                    </button>
+                    <div class="input-actions">
+                        <button id="micButton" class="mic-button" onclick="toggleSpeechRecognition()" title="Click to speak your question">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                                <line x1="12" y1="19" x2="12" y2="23"></line>
+                                <line x1="8" y1="23" x2="16" y2="23"></line>
+                            </svg>
+                        </button>
+                        <button id="askButton" class="ask-button" onclick="askJim()">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="22" y1="2" x2="11" y2="13"></line>
+                                <polygon points="22,2 15,22 11,13 2,9 22,2"></polygon>
+                            </svg>
+                            Send
+                        </button>
+                    </div>
                 </div>
 
                 <div class="stats">
@@ -2232,6 +2577,34 @@ CHAT_TEMPLATE = """
         }
 
         // Profile/Memory Modal Functions
+        // Mobile Menu Functions
+        function toggleMobileMenu() {
+            const drawer = document.getElementById('mobileDrawer');
+            const overlay = document.getElementById('mobileOverlay');
+            drawer.classList.add('open');
+            overlay.style.display = 'block';
+            setTimeout(() => overlay.classList.add('visible'), 10);
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeMobileMenu() {
+            const drawer = document.getElementById('mobileDrawer');
+            const overlay = document.getElementById('mobileOverlay');
+            drawer.classList.remove('open');
+            overlay.classList.remove('visible');
+            setTimeout(() => {
+                overlay.style.display = 'none';
+                document.body.style.overflow = '';
+            }, 300);
+        }
+
+        // Close mobile menu on escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                closeMobileMenu();
+            }
+        });
+
         async function showProfile() {
             const modal = document.getElementById('profileModal');
             const content = document.getElementById('profileContent');
