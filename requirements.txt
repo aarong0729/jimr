@@ -4,3 +4,4 @@ python-dotenv==1.0.0
 elevenlabs>=1.0.0
 gunicorn==21.2.0
 bcrypt>=4.0.0
+psycopg2-binary>=2.9.0

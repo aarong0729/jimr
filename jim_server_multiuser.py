@@ -16,8 +16,93 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import re
 from pathlib import Path
+from contextlib import contextmanager
 
 load_dotenv()
+
+# Database setup - use PostgreSQL if DATABASE_URL is set, otherwise fall back to JSON files
+DATABASE_URL = os.getenv("DATABASE_URL")
+USE_POSTGRES = DATABASE_URL is not None
+
+if USE_POSTGRES:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    from psycopg2 import pool
+
+    # Create connection pool
+    db_pool = pool.ThreadedConnectionPool(1, 10, DATABASE_URL)
+
+    @contextmanager
+    def get_db_connection():
+        """Get a database connection from the pool."""
+        conn = db_pool.getconn()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            db_pool.putconn(conn)
+
+    def init_database():
+        """Create tables if they don't exist."""
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Users table
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        user_id VARCHAR(32) PRIMARY KEY,
+                        username VARCHAR(255) UNIQUE NOT NULL,
+                        email VARCHAR(255) NOT NULL,
+                        password_hash VARCHAR(255) NOT NULL,
+                        created_at TIMESTAMP NOT NULL,
+                        is_active BOOLEAN DEFAULT true
+                    )
+                """)
+
+                # User profiles table
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS user_profiles (
+                        user_id VARCHAR(32) PRIMARY KEY REFERENCES users(user_id),
+                        name VARCHAR(255),
+                        location VARCHAR(255),
+                        total_conversations INTEGER DEFAULT 0,
+                        recurring_themes JSONB DEFAULT '[]',
+                        growth_areas JSONB DEFAULT '[]',
+                        goals JSONB DEFAULT '[]',
+                        strengths JSONB DEFAULT '[]',
+                        challenges JSONB DEFAULT '[]',
+                        insights JSONB DEFAULT '[]',
+                        first_conversation TIMESTAMP,
+                        last_conversation TIMESTAMP
+                    )
+                """)
+
+                # Conversations table
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS conversations (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(32) NOT NULL REFERENCES users(user_id),
+                        question TEXT NOT NULL,
+                        response TEXT NOT NULL,
+                        timestamp TIMESTAMP NOT NULL,
+                        has_audio BOOLEAN DEFAULT false,
+                        is_favorite BOOLEAN DEFAULT false
+                    )
+                """)
+
+                # Create index for faster queries
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_conversations_user_time
+                    ON conversations(user_id, timestamp DESC)
+                """)
+        print("✅ PostgreSQL database initialized")
+
+    # Initialize database on startup
+    init_database()
+else:
+    print("⚠️  DATABASE_URL not set. Using JSON file storage (data will be lost on redeploy)")
 
 # Validate required environment variables
 def validate_env():
@@ -57,148 +142,285 @@ class MultiUserJimCoach:
         
     def create_user_account(self, username: str, email: str, password: str) -> Dict:
         """Create a new user account."""
-        # Clean input
         username = username.strip()
         email = email.strip()
-        
-        users_file = "user_data/users.json"
-        
-        # Load existing users
-        if os.path.exists(users_file):
-            with open(users_file, 'r') as f:
-                users = json.load(f)
-        else:
-            users = {}
-        
-        # Check if user exists
-        if username in users:
-            return {"success": False, "message": "Username already exists"}
-        
-        # Create user with bcrypt hashed password
+
         user_id = f"user_{secrets.token_hex(8)}"
         password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode('utf-8')
-        
-        users[username] = {
-            "user_id": user_id,
-            "email": email,
-            "password_hash": password_hash,
-            "created_at": datetime.now().isoformat(),
-            "is_active": True
-        }
-        
-        # Save users
-        with open(users_file, 'w') as f:
-            json.dump(users, f, indent=2)
-        
-        # Create user directory and files
-        user_dir = f"user_data/{user_id}"
-        os.makedirs(user_dir, exist_ok=True)
-        
-        # Initialize user profile
-        profile = {
-            "name": "",
-            "location": "",
-            "total_conversations": 0,
-            "recurring_themes": [],
-            "growth_areas": [],
-            "goals": [],
-            "strengths": [],
-            "challenges": [],
-            "insights": [],
-            "first_conversation": None,
-            "last_conversation": None
-        }
-        
-        with open(f"{user_dir}/profile.json", 'w') as f:
-            json.dump(profile, f, indent=2)
-        
-        # Initialize conversation history
-        with open(f"{user_dir}/conversations.json", 'w') as f:
-            json.dump([], f)
-        
-        return {"success": True, "user_id": user_id, "message": "Account created successfully"}
+        created_at = datetime.now()
+
+        if USE_POSTGRES:
+            try:
+                with get_db_connection() as conn:
+                    with conn.cursor() as cur:
+                        # Check if username exists
+                        cur.execute("SELECT 1 FROM users WHERE username = %s", (username,))
+                        if cur.fetchone():
+                            return {"success": False, "message": "Username already exists"}
+
+                        # Insert user
+                        cur.execute("""
+                            INSERT INTO users (user_id, username, email, password_hash, created_at, is_active)
+                            VALUES (%s, %s, %s, %s, %s, true)
+                        """, (user_id, username, email, password_hash, created_at))
+
+                        # Insert empty profile
+                        cur.execute("""
+                            INSERT INTO user_profiles (user_id, name, location, total_conversations,
+                                recurring_themes, growth_areas, goals, strengths, challenges, insights)
+                            VALUES (%s, '', '', 0, '[]', '[]', '[]', '[]', '[]', '[]')
+                        """, (user_id,))
+
+                return {"success": True, "user_id": user_id, "message": "Account created successfully"}
+            except Exception as e:
+                print(f"Database error: {e}")
+                return {"success": False, "message": "Database error creating account"}
+        else:
+            # JSON file fallback
+            users_file = "user_data/users.json"
+            if os.path.exists(users_file):
+                with open(users_file, 'r') as f:
+                    users = json.load(f)
+            else:
+                users = {}
+
+            if username in users:
+                return {"success": False, "message": "Username already exists"}
+
+            users[username] = {
+                "user_id": user_id,
+                "email": email,
+                "password_hash": password_hash,
+                "created_at": created_at.isoformat(),
+                "is_active": True
+            }
+
+            with open(users_file, 'w') as f:
+                json.dump(users, f, indent=2)
+
+            user_dir = f"user_data/{user_id}"
+            os.makedirs(user_dir, exist_ok=True)
+
+            profile = {
+                "name": "", "location": "", "total_conversations": 0,
+                "recurring_themes": [], "growth_areas": [], "goals": [],
+                "strengths": [], "challenges": [], "insights": [],
+                "first_conversation": None, "last_conversation": None
+            }
+            with open(f"{user_dir}/profile.json", 'w') as f:
+                json.dump(profile, f, indent=2)
+
+            with open(f"{user_dir}/conversations.json", 'w') as f:
+                json.dump([], f)
+
+            return {"success": True, "user_id": user_id, "message": "Account created successfully"}
     
     def authenticate_user(self, username: str, password: str) -> Optional[str]:
         """Authenticate user and return user_id if successful."""
         username = username.strip()
-        users_file = "user_data/users.json"
 
-        if not os.path.exists(users_file):
-            return None
+        if USE_POSTGRES:
+            try:
+                with get_db_connection() as conn:
+                    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                        cur.execute("""
+                            SELECT user_id, password_hash, is_active
+                            FROM users WHERE username = %s
+                        """, (username,))
+                        user = cur.fetchone()
 
-        with open(users_file, 'r') as f:
-            users = json.load(f)
+                        if not user or not user["is_active"]:
+                            return None
 
-        if username not in users:
-            return None
+                        stored_hash = user["password_hash"]
 
-        user = users[username]
-        if not user["is_active"]:
-            return None
+                        # Try bcrypt (all PostgreSQL users use bcrypt)
+                        if bcrypt.checkpw(password.encode(), stored_hash.encode()):
+                            return user["user_id"]
 
-        stored_hash = user["password_hash"]
-
-        # Try bcrypt first (new format)
-        if stored_hash.startswith('$2'):
-            if bcrypt.checkpw(password.encode(), stored_hash.encode()):
-                return user["user_id"]
+                        return None
+            except Exception as e:
+                print(f"Authentication error: {e}")
+                return None
         else:
-            # Legacy SHA-256 hash - verify and upgrade to bcrypt
-            import hashlib
-            if stored_hash == hashlib.sha256(password.encode()).hexdigest():
-                # Upgrade to bcrypt
-                new_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode('utf-8')
-                users[username]["password_hash"] = new_hash
-                with open(users_file, 'w') as f:
-                    json.dump(users, f, indent=2)
-                return user["user_id"]
+            # JSON file fallback
+            users_file = "user_data/users.json"
+            if not os.path.exists(users_file):
+                return None
 
-        return None
+            with open(users_file, 'r') as f:
+                users = json.load(f)
+
+            if username not in users:
+                return None
+
+            user = users[username]
+            if not user["is_active"]:
+                return None
+
+            stored_hash = user["password_hash"]
+
+            if stored_hash.startswith('$2'):
+                if bcrypt.checkpw(password.encode(), stored_hash.encode()):
+                    return user["user_id"]
+            else:
+                import hashlib
+                if stored_hash == hashlib.sha256(password.encode()).hexdigest():
+                    new_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode('utf-8')
+                    users[username]["password_hash"] = new_hash
+                    with open(users_file, 'w') as f:
+                        json.dump(users, f, indent=2)
+                    return user["user_id"]
+
+            return None
     
     def load_user_profile(self, user_id: str) -> Dict:
         """Load user profile."""
-        profile_file = f"user_data/{user_id}/profile.json"
-        
-        if os.path.exists(profile_file):
-            with open(profile_file, 'r') as f:
-                return json.load(f)
-        
-        # Return default profile if not found
-        return {
-            "name": "",
-            "location": "",
-            "total_conversations": 0,
-            "recurring_themes": [],
-            "growth_areas": [],
-            "goals": [],
-            "strengths": [],
-            "challenges": [],
-            "insights": [],
-            "first_conversation": None,
-            "last_conversation": None
+        default_profile = {
+            "name": "", "location": "", "total_conversations": 0,
+            "recurring_themes": [], "growth_areas": [], "goals": [],
+            "strengths": [], "challenges": [], "insights": [],
+            "first_conversation": None, "last_conversation": None
         }
-    
+
+        if USE_POSTGRES:
+            try:
+                with get_db_connection() as conn:
+                    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                        cur.execute("""
+                            SELECT name, location, total_conversations,
+                                recurring_themes, growth_areas, goals,
+                                strengths, challenges, insights,
+                                first_conversation, last_conversation
+                            FROM user_profiles WHERE user_id = %s
+                        """, (user_id,))
+                        row = cur.fetchone()
+                        if row:
+                            return {
+                                "name": row["name"] or "",
+                                "location": row["location"] or "",
+                                "total_conversations": row["total_conversations"] or 0,
+                                "recurring_themes": row["recurring_themes"] or [],
+                                "growth_areas": row["growth_areas"] or [],
+                                "goals": row["goals"] or [],
+                                "strengths": row["strengths"] or [],
+                                "challenges": row["challenges"] or [],
+                                "insights": row["insights"] or [],
+                                "first_conversation": row["first_conversation"].isoformat() if row["first_conversation"] else None,
+                                "last_conversation": row["last_conversation"].isoformat() if row["last_conversation"] else None
+                            }
+                        return default_profile
+            except Exception as e:
+                print(f"Error loading profile: {e}")
+                return default_profile
+        else:
+            profile_file = f"user_data/{user_id}/profile.json"
+            if os.path.exists(profile_file):
+                with open(profile_file, 'r') as f:
+                    return json.load(f)
+            return default_profile
+
     def save_user_profile(self, user_id: str, profile: Dict):
         """Save user profile."""
-        profile_file = f"user_data/{user_id}/profile.json"
-        with open(profile_file, 'w') as f:
-            json.dump(profile, f, indent=2)
-    
+        if USE_POSTGRES:
+            try:
+                with get_db_connection() as conn:
+                    with conn.cursor() as cur:
+                        first_conv = profile.get("first_conversation")
+                        last_conv = profile.get("last_conversation")
+                        if isinstance(first_conv, str):
+                            first_conv = datetime.fromisoformat(first_conv)
+                        if isinstance(last_conv, str):
+                            last_conv = datetime.fromisoformat(last_conv)
+
+                        cur.execute("""
+                            UPDATE user_profiles SET
+                                name = %s, location = %s, total_conversations = %s,
+                                recurring_themes = %s, growth_areas = %s, goals = %s,
+                                strengths = %s, challenges = %s, insights = %s,
+                                first_conversation = %s, last_conversation = %s
+                            WHERE user_id = %s
+                        """, (
+                            profile.get("name", ""),
+                            profile.get("location", ""),
+                            profile.get("total_conversations", 0),
+                            json.dumps(profile.get("recurring_themes", [])),
+                            json.dumps(profile.get("growth_areas", [])),
+                            json.dumps(profile.get("goals", [])),
+                            json.dumps(profile.get("strengths", [])),
+                            json.dumps(profile.get("challenges", [])),
+                            json.dumps(profile.get("insights", [])),
+                            first_conv,
+                            last_conv,
+                            user_id
+                        ))
+            except Exception as e:
+                print(f"Error saving profile: {e}")
+        else:
+            profile_file = f"user_data/{user_id}/profile.json"
+            with open(profile_file, 'w') as f:
+                json.dump(profile, f, indent=2)
+
     def load_user_conversations(self, user_id: str) -> List[Dict]:
         """Load user conversation history."""
-        conversations_file = f"user_data/{user_id}/conversations.json"
-        
-        if os.path.exists(conversations_file):
-            with open(conversations_file, 'r') as f:
-                return json.load(f)
-        
-        return []
-    
+        if USE_POSTGRES:
+            try:
+                with get_db_connection() as conn:
+                    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                        cur.execute("""
+                            SELECT question, response, timestamp, has_audio, is_favorite
+                            FROM conversations
+                            WHERE user_id = %s
+                            ORDER BY timestamp ASC
+                        """, (user_id,))
+                        rows = cur.fetchall()
+                        return [{
+                            "question": row["question"],
+                            "response": row["response"],
+                            "timestamp": row["timestamp"].isoformat(),
+                            "has_audio": row["has_audio"],
+                            "is_favorite": row["is_favorite"]
+                        } for row in rows]
+            except Exception as e:
+                print(f"Error loading conversations: {e}")
+                return []
+        else:
+            conversations_file = f"user_data/{user_id}/conversations.json"
+            if os.path.exists(conversations_file):
+                with open(conversations_file, 'r') as f:
+                    return json.load(f)
+            return []
+
     def save_user_conversations(self, user_id: str, conversations: List[Dict]):
-        """Save user conversation history."""
-        conversations_file = f"user_data/{user_id}/conversations.json"
-        with open(conversations_file, 'w') as f:
-            json.dump(conversations, f, indent=2)
+        """Save user conversation history (append the last conversation to DB)."""
+        if USE_POSTGRES:
+            # For PostgreSQL, we only append the newest conversation
+            if conversations:
+                conv = conversations[-1]
+                try:
+                    with get_db_connection() as conn:
+                        with conn.cursor() as cur:
+                            timestamp = conv.get("timestamp")
+                            if isinstance(timestamp, str):
+                                timestamp = datetime.fromisoformat(timestamp)
+                            cur.execute("""
+                                INSERT INTO conversations (user_id, question, response, timestamp, has_audio, is_favorite)
+                                VALUES (%s, %s, %s, %s, %s, %s)
+                                ON CONFLICT DO NOTHING
+                            """, (
+                                user_id,
+                                conv["question"],
+                                conv["response"],
+                                timestamp,
+                                conv.get("has_audio", False),
+                                conv.get("is_favorite", False)
+                            ))
+                except Exception as e:
+                    print(f"Error saving conversation: {e}")
+        else:
+            conversations_file = f"user_data/{user_id}/conversations.json"
+            with open(conversations_file, 'w') as f:
+                json.dump(conversations, f, indent=2)
     
     def extract_personal_details(self, user_id: str, question: str, response: str):
         """Extract and update personal details from conversations."""
@@ -386,28 +608,49 @@ class MultiUserJimCoach:
     
     def get_admin_stats(self) -> Dict:
         """Get system statistics for admin dashboard."""
-        users_file = "user_data/users.json"
-        
-        if not os.path.exists(users_file):
-            return {"total_users": 0, "active_users": 0, "total_conversations": 0}
-        
-        with open(users_file, 'r') as f:
-            users = json.load(f)
-        
-        total_users = len(users)
-        active_users = sum(1 for user in users.values() if user["is_active"])
-        
-        total_conversations = 0
-        for user_data in users.values():
-            user_id = user_data["user_id"]
-            conversations = self.load_user_conversations(user_id)
-            total_conversations += len(conversations)
-        
-        return {
-            "total_users": total_users,
-            "active_users": active_users,
-            "total_conversations": total_conversations
-        }
+        if USE_POSTGRES:
+            try:
+                with get_db_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT COUNT(*) FROM users")
+                        total_users = cur.fetchone()[0]
+
+                        cur.execute("SELECT COUNT(*) FROM users WHERE is_active = true")
+                        active_users = cur.fetchone()[0]
+
+                        cur.execute("SELECT COUNT(*) FROM conversations")
+                        total_conversations = cur.fetchone()[0]
+
+                        return {
+                            "total_users": total_users,
+                            "active_users": active_users,
+                            "total_conversations": total_conversations
+                        }
+            except Exception as e:
+                print(f"Error getting admin stats: {e}")
+                return {"total_users": 0, "active_users": 0, "total_conversations": 0}
+        else:
+            users_file = "user_data/users.json"
+            if not os.path.exists(users_file):
+                return {"total_users": 0, "active_users": 0, "total_conversations": 0}
+
+            with open(users_file, 'r') as f:
+                users = json.load(f)
+
+            total_users = len(users)
+            active_users = sum(1 for user in users.values() if user["is_active"])
+
+            total_conversations = 0
+            for user_data in users.values():
+                user_id = user_data["user_id"]
+                conversations = self.load_user_conversations(user_id)
+                total_conversations += len(conversations)
+
+            return {
+                "total_users": total_users,
+                "active_users": active_users,
+                "total_conversations": total_conversations
+            }
 
 # Flask app setup
 app = Flask(__name__)
@@ -513,16 +756,44 @@ def api_toggle_favorite():
     if not timestamp:
         return jsonify({"success": False, "error": "Timestamp required"})
 
-    conversations = coach.load_user_conversations(session['user_id'])
+    user_id = session['user_id']
 
-    # Find and toggle the conversation
-    for conv in conversations:
-        if conv.get('timestamp') == timestamp:
-            conv['is_favorite'] = not conv.get('is_favorite', False)
-            coach.save_user_conversations(session['user_id'], conversations)
-            return jsonify({"success": True, "is_favorite": conv['is_favorite']})
+    if USE_POSTGRES:
+        try:
+            ts = datetime.fromisoformat(timestamp)
+            with get_db_connection() as conn:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    # Toggle the favorite status directly in DB
+                    cur.execute("""
+                        UPDATE conversations
+                        SET is_favorite = NOT is_favorite
+                        WHERE user_id = %s AND timestamp = %s
+                        RETURNING is_favorite
+                    """, (user_id, ts))
+                    row = cur.fetchone()
+                    if row:
+                        return jsonify({"success": True, "is_favorite": row["is_favorite"]})
+                    return jsonify({"success": False, "error": "Conversation not found"})
+        except Exception as e:
+            print(f"Error toggling favorite: {e}")
+            return jsonify({"success": False, "error": "Database error"})
+    else:
+        conversations = coach.load_user_conversations(user_id)
+        for conv in conversations:
+            if conv.get('timestamp') == timestamp:
+                conv['is_favorite'] = not conv.get('is_favorite', False)
+                coach.save_user_conversations(user_id, conversations)
+                return jsonify({"success": True, "is_favorite": conv['is_favorite']})
+        return jsonify({"success": False, "error": "Conversation not found"})
 
-    return jsonify({"success": False, "error": "Conversation not found"})
+@app.route('/api/profile')
+def api_profile():
+    """Get user's profile/memory data."""
+    if 'user_id' not in session:
+        return jsonify({"success": False, "error": "Not authenticated"})
+
+    profile = coach.load_user_profile(session['user_id'])
+    return jsonify({"success": True, "profile": profile})
 
 @app.route('/admin')
 def admin_dashboard():
@@ -888,6 +1159,107 @@ CHAT_TEMPLATE = """
         .logout-btn:hover {
             background: rgba(220, 53, 69, 0.3);
             color: #fca5a5;
+        }
+
+        .header-buttons {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .memory-btn {
+            padding: 8px 16px;
+            background: rgba(59, 130, 246, 0.2);
+            color: #60a5fa;
+            border: 1px solid rgba(59, 130, 246, 0.4);
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        .memory-btn:hover {
+            background: rgba(59, 130, 246, 0.3);
+            color: #93c5fd;
+        }
+
+        .profile-header {
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #30363d;
+            color: #f0f6fc;
+        }
+
+        .profile-header h2 {
+            margin: 0;
+            font-size: 1.5em;
+        }
+
+        .profile-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+
+        .stat-card {
+            background: #21262d;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #30363d;
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #60a5fa;
+        }
+
+        .stat-label {
+            color: #8b949e;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+
+        .profile-section {
+            background: #0d1117;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border: 1px solid #30363d;
+        }
+
+        .profile-section h3 {
+            color: #60a5fa;
+            margin: 0 0 12px 0;
+            font-size: 1.1em;
+        }
+
+        .profile-item {
+            padding: 8px 0;
+            color: #e6edf3;
+            border-bottom: 1px solid #21262d;
+        }
+
+        .profile-item:last-child {
+            border-bottom: none;
+        }
+
+        .profile-tag {
+            display: inline-block;
+            background: rgba(6, 182, 212, 0.2);
+            color: #a5f3fc;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            margin: 3px;
+        }
+
+        .profile-empty {
+            color: #8b949e;
+            font-style: italic;
         }
 
         .chat-container {
@@ -1451,7 +1823,10 @@ CHAT_TEMPLATE = """
                     <div class="main-title">Jim Rohn AI Coach</div>
                     <div class="main-subtitle">"Success is neither magical nor mysterious. Success is the natural consequence of consistently applying basic fundamentals."</div>
                 </div>
-                <a href="/logout" class="logout-btn">Logout</a>
+                <div class="header-buttons">
+                    <button class="memory-btn" onclick="showProfile()">🧠 My Memory</button>
+                    <a href="/logout" class="logout-btn">Logout</a>
+                </div>
             </div>
 
             <div class="chat-container" id="chatContainer">
@@ -1534,6 +1909,19 @@ CHAT_TEMPLATE = """
             </div>
             <div id="historyContent">
                 <p>Loading history...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Profile/Memory Modal -->
+    <div id="profileModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeProfile()">&times;</span>
+            <div class="profile-header">
+                <h2>🧠 What Jim Remembers About You</h2>
+            </div>
+            <div id="profileContent">
+                <p>Loading your profile...</p>
             </div>
         </div>
     </div>
@@ -1809,6 +2197,124 @@ CHAT_TEMPLATE = """
             document.getElementById('historyModal').style.display = 'none';
         }
 
+        // Profile/Memory Modal Functions
+        async function showProfile() {
+            const modal = document.getElementById('profileModal');
+            const content = document.getElementById('profileContent');
+
+            if (!modal) {
+                console.error('Profile modal not found!');
+                return;
+            }
+
+            modal.style.display = 'block';
+            content.innerHTML = '<p>Loading your profile...</p>';
+
+            try {
+                const response = await fetch('/api/profile');
+                const data = await response.json();
+
+                if (data.success) {
+                    content.innerHTML = buildProfileHTML(data.profile);
+                } else {
+                    content.innerHTML = '<p>Error loading profile: ' + (data.error || 'Unknown error') + '</p>';
+                }
+            } catch (error) {
+                console.error('Failed to load profile:', error);
+                content.innerHTML = '<p>Error loading profile: ' + error.message + '</p>';
+            }
+        }
+
+        function closeProfile() {
+            document.getElementById('profileModal').style.display = 'none';
+        }
+
+        function buildProfileHTML(profile) {
+            let html = '';
+
+            // Stats Grid
+            html += '<div class="profile-stats">';
+            html += `<div class="stat-card">
+                <div class="stat-number">${profile.total_conversations || 0}</div>
+                <div class="stat-label">Conversations</div>
+            </div>`;
+            if (profile.first_conversation) {
+                const memberSince = new Date(profile.first_conversation).toLocaleDateString();
+                html += `<div class="stat-card">
+                    <div class="stat-number" style="font-size: 1em;">${memberSince}</div>
+                    <div class="stat-label">Member Since</div>
+                </div>`;
+            }
+            html += '</div>';
+
+            // Personal Info
+            html += '<div class="profile-section">';
+            html += '<h3>Personal Information</h3>';
+            html += `<div class="profile-item"><strong>Name:</strong> ${profile.name || '<span class="profile-empty">Not yet learned</span>'}</div>`;
+            html += `<div class="profile-item"><strong>Location:</strong> ${profile.location || '<span class="profile-empty">Not yet learned</span>'}</div>`;
+            html += '</div>';
+
+            // Recurring Themes
+            html += '<div class="profile-section">';
+            html += '<h3>Your Recurring Themes</h3>';
+            if (profile.recurring_themes && profile.recurring_themes.length > 0) {
+                html += '<div>';
+                profile.recurring_themes.forEach(theme => {
+                    html += `<span class="profile-tag">${theme}</span>`;
+                });
+                html += '</div>';
+            } else {
+                html += '<p class="profile-empty">No patterns identified yet. Keep chatting with Jim!</p>';
+            }
+            html += '</div>';
+
+            // Goals
+            html += '<div class="profile-section">';
+            html += '<h3>Your Goals</h3>';
+            if (profile.goals && profile.goals.length > 0) {
+                profile.goals.forEach(goal => {
+                    html += `<div class="profile-item">• ${goal}</div>`;
+                });
+            } else {
+                html += '<p class="profile-empty">No goals identified yet. Share your aspirations with Jim!</p>';
+            }
+            html += '</div>';
+
+            // Growth Areas
+            html += '<div class="profile-section">';
+            html += '<h3>Growth Areas</h3>';
+            if (profile.growth_areas && profile.growth_areas.length > 0) {
+                profile.growth_areas.forEach(area => {
+                    html += `<div class="profile-item">• ${area}</div>`;
+                });
+            } else {
+                html += '<p class="profile-empty">No growth areas identified yet.</p>';
+            }
+            html += '</div>';
+
+            // Strengths
+            if (profile.strengths && profile.strengths.length > 0) {
+                html += '<div class="profile-section">';
+                html += '<h3>Your Strengths</h3>';
+                profile.strengths.forEach(strength => {
+                    html += `<div class="profile-item">• ${strength}</div>`;
+                });
+                html += '</div>';
+            }
+
+            // Insights
+            if (profile.insights && profile.insights.length > 0) {
+                html += '<div class="profile-section">';
+                html += '<h3>Insights About You</h3>';
+                profile.insights.forEach(insight => {
+                    html += `<div class="profile-item">• ${insight}</div>`;
+                });
+                html += '</div>';
+            }
+
+            return html;
+        }
+
         // Toggle conversation expansion
         function toggleConversation(index) {
             const conversation = conversationsData[index];
@@ -1869,9 +2375,13 @@ CHAT_TEMPLATE = """
 
         // Close modal when clicking outside of it
         window.onclick = function(event) {
-            const modal = document.getElementById('historyModal');
-            if (event.target === modal) {
+            const historyModal = document.getElementById('historyModal');
+            const profileModal = document.getElementById('profileModal');
+            if (event.target === historyModal) {
                 closeHistory();
+            }
+            if (event.target === profileModal) {
+                closeProfile();
             }
         }
 
