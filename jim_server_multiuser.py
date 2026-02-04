@@ -114,6 +114,11 @@ if USE_POSTGRES:
 
     # Initialize database on startup
     init_database()
+
+    # Debug: Check SendGrid env vars
+    sg_key = os.getenv("SENDGRID_API_KEY")
+    sg_from = os.getenv("SENDGRID_FROM_EMAIL")
+    print(f"📧 SendGrid config: API_KEY={'SET' if sg_key else 'NOT SET'}, FROM_EMAIL={sg_from or 'NOT SET'}")
 else:
     print("⚠️  DATABASE_URL not set. Using JSON file storage (data will be lost on redeploy)")
 
