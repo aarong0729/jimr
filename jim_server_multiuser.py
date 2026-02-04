@@ -535,7 +535,9 @@ class MultiUserJimCoach:
             enhanced_prompt = self.system_prompt
             if context:
                 enhanced_prompt += f"\n\n=== MEMORY CONTEXT ===\n{context}\n\nUse this context to provide more personalized advice. Reference past conversations when relevant, but don't make it obvious unless it naturally fits the conversation."
-            
+
+            import time
+            openai_start = time.time()
             response = self.openai_client.chat.completions.create(
                 model="gpt-4o",
                 messages=[
@@ -545,28 +547,38 @@ class MultiUserJimCoach:
                 temperature=0.7,
                 max_tokens=1000
             )
-            
+
             jim_response = response.choices[0].message.content
+            print(f"🤖 OpenAI response in {time.time() - openai_start:.1f}s ({len(jim_response)} chars)")
             
             # Generate voice if requested and API key is available
             audio_data = None
             if generate_voice and os.getenv("ELEVENLABS_API_KEY") and os.getenv("JIM_ROHN_VOICE_ID"):
                 try:
+                    import time
+                    voice_start = time.time()
                     from elevenlabs import ElevenLabs
                     elevenlabs_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
-                    
+
                     # Clean text for speech synthesis
                     clean_text = self.clean_text_for_speech(jim_response)
-                    
+
+                    # Limit text length for faster voice generation (max ~2000 chars)
+                    if len(clean_text) > 2000:
+                        clean_text = clean_text[:2000] + "..."
+                        print(f"⚠️ Truncated voice text from {len(jim_response)} to 2000 chars")
+
                     audio_generator = elevenlabs_client.text_to_speech.convert(
                         voice_id=os.getenv("JIM_ROHN_VOICE_ID"),
                         text=clean_text,
-                        model_id="eleven_monolingual_v1"
+                        model_id="eleven_turbo_v2"  # Faster model
                     )
                     audio_data = b"".join(audio_generator)
-                    
+                    print(f"🔊 Voice generated in {time.time() - voice_start:.1f}s ({len(clean_text)} chars)")
+
                 except Exception as voice_error:
                     print(f"⚠️ Voice generation failed: {voice_error}")
+                    traceback.print_exc()
                     audio_data = None
             
             # Store conversation in user's memory
