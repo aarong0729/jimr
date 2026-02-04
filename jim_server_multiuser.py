@@ -1470,9 +1470,9 @@ CHAT_TEMPLATE = """
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
     <title>Jim Rohn AI Coach</title>
-    <!-- Version 2.0 - Multi-User Dark Mode -->
+    <!-- Version 2.1 - Mobile Scroll Fix -->
     <style>
         * {
             margin: 0;
@@ -1647,6 +1647,8 @@ CHAT_TEMPLATE = """
             display: flex;
             flex-direction: column;
             background: transparent;
+            min-height: 0; /* Important for flex scrolling */
+            overflow: hidden;
         }
 
         .main-header {
@@ -1793,12 +1795,14 @@ CHAT_TEMPLATE = """
         .chat-container {
             flex: 1;
             overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
             padding: 16px;
             margin: 0 24px;
             background: rgba(9, 9, 11, 0.4);
             border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 16px;
             position: relative;
+            min-height: 0; /* Important for flex scrolling */
         }
 
         .chat-container::before {
@@ -2436,6 +2440,11 @@ CHAT_TEMPLATE = """
 
         /* Mobile Responsive Styles */
         @media (max-width: 768px) {
+            body {
+                overflow: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+
             .sidebar {
                 display: none;
             }
@@ -2454,12 +2463,24 @@ CHAT_TEMPLATE = """
 
             .app-container {
                 flex-direction: column;
+                height: 100%;
+                min-height: 100vh;
+                min-height: -webkit-fill-available; /* iOS fix */
+            }
+
+            .main-content {
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+                min-height: 0;
+                height: 100%;
             }
 
             .main-header {
                 padding: 12px 16px;
                 flex-wrap: wrap;
                 gap: 8px;
+                flex-shrink: 0;
             }
 
             .header-info {
@@ -2486,6 +2507,12 @@ CHAT_TEMPLATE = """
                 margin: 8px 12px;
                 padding: 12px;
                 border-radius: 12px;
+                flex: 1;
+                min-height: 0;
+                overflow-y: auto;
+                -webkit-overflow-scrolling: touch;
+                touch-action: pan-y;
+                overscroll-behavior: contain;
             }
 
             .message {
@@ -2506,6 +2533,9 @@ CHAT_TEMPLATE = """
                 margin: 8px 12px 16px 12px;
                 padding: 14px;
                 border-radius: 14px;
+                flex-shrink: 0;
+                position: relative;
+                z-index: 10;
             }
 
             .voice-controls-row {
@@ -3392,6 +3422,13 @@ CHAT_TEMPLATE = """
                     URL.revokeObjectURL(audioUrl);
                     hideAudioVisualizer();
                     console.log('Audio playback completed');
+                    // Ensure scroll is re-enabled on mobile after audio playback
+                    document.body.style.overflow = '';
+                    const chatContainer = document.getElementById('chatContainer');
+                    if (chatContainer) {
+                        chatContainer.style.overflow = '';
+                        chatContainer.style.overflowY = 'auto';
+                    }
                 };
                 
                 audio.onerror = (e) => {
