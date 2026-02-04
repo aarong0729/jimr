@@ -98,6 +98,18 @@ if USE_POSTGRES:
                     CREATE INDEX IF NOT EXISTS idx_conversations_user_time
                     ON conversations(user_id, timestamp DESC)
                 """)
+
+                # Password reset tokens table
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                        id SERIAL PRIMARY KEY,
+                        user_id VARCHAR(32) NOT NULL REFERENCES users(user_id),
+                        token VARCHAR(64) UNIQUE NOT NULL,
+                        created_at TIMESTAMP NOT NULL,
+                        expires_at TIMESTAMP NOT NULL,
+                        used BOOLEAN DEFAULT false
+                    )
+                """)
         print("✅ PostgreSQL database initialized")
 
     # Initialize database on startup
@@ -141,10 +153,35 @@ class MultiUserJimCoach:
             self.system_prompt = """You are Jim Rohn, the legendary personal development speaker and mentor.
             Respond with wisdom, warmth, and practical advice in your distinctive style."""
         
+    def validate_password(self, password: str) -> Dict:
+        """Validate password meets policy requirements."""
+        errors = []
+
+        if len(password) < 8:
+            errors.append("at least 8 characters")
+        if not any(c.isupper() for c in password):
+            errors.append("one uppercase letter")
+        if not any(c.islower() for c in password):
+            errors.append("one lowercase letter")
+        if not any(c.isdigit() for c in password):
+            errors.append("one number")
+
+        if errors:
+            return {
+                "valid": False,
+                "message": f"Password must contain {', '.join(errors)}"
+            }
+        return {"valid": True}
+
     def create_user_account(self, username: str, email: str, password: str) -> Dict:
         """Create a new user account."""
         username = username.strip()
         email = email.strip()
+
+        # Validate password policy
+        password_check = self.validate_password(password)
+        if not password_check["valid"]:
+            return {"success": False, "message": password_check["message"]}
 
         user_id = f"user_{secrets.token_hex(8)}"
         password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode('utf-8')
@@ -274,7 +311,216 @@ class MultiUserJimCoach:
                     return user["user_id"]
 
             return None
-    
+
+    def get_user_by_email(self, email: str) -> Optional[Dict]:
+        """Find user by email address."""
+        email = email.strip().lower()
+
+        if USE_POSTGRES:
+            try:
+                with get_db_connection() as conn:
+                    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                        cur.execute("""
+                            SELECT user_id, username, email
+                            FROM users WHERE LOWER(email) = %s AND is_active = true
+                        """, (email,))
+                        return cur.fetchone()
+            except Exception as e:
+                print(f"Error finding user by email: {e}")
+                return None
+        else:
+            users_file = "user_data/users.json"
+            if not os.path.exists(users_file):
+                return None
+            with open(users_file, 'r') as f:
+                users = json.load(f)
+            for username, user in users.items():
+                if user.get("email", "").lower() == email and user.get("is_active", True):
+                    return {"user_id": user["user_id"], "username": username, "email": user["email"]}
+            return None
+
+    def create_reset_token(self, user_id: str) -> Optional[str]:
+        """Create a password reset token."""
+        token = secrets.token_urlsafe(32)
+        created_at = datetime.now()
+        expires_at = datetime.now() + __import__('datetime').timedelta(hours=1)
+
+        if USE_POSTGRES:
+            try:
+                with get_db_connection() as conn:
+                    with conn.cursor() as cur:
+                        # Invalidate any existing tokens for this user
+                        cur.execute("""
+                            UPDATE password_reset_tokens
+                            SET used = true
+                            WHERE user_id = %s AND used = false
+                        """, (user_id,))
+
+                        # Create new token
+                        cur.execute("""
+                            INSERT INTO password_reset_tokens (user_id, token, created_at, expires_at, used)
+                            VALUES (%s, %s, %s, %s, false)
+                        """, (user_id, token, created_at, expires_at))
+                return token
+            except Exception as e:
+                print(f"Error creating reset token: {e}")
+                traceback.print_exc()
+                return None
+        else:
+            # For JSON fallback, store token in a separate file
+            tokens_file = "user_data/reset_tokens.json"
+            try:
+                if os.path.exists(tokens_file):
+                    with open(tokens_file, 'r') as f:
+                        tokens = json.load(f)
+                else:
+                    tokens = {}
+
+                tokens[token] = {
+                    "user_id": user_id,
+                    "created_at": created_at.isoformat(),
+                    "expires_at": expires_at.isoformat(),
+                    "used": False
+                }
+
+                with open(tokens_file, 'w') as f:
+                    json.dump(tokens, f, indent=2)
+                return token
+            except Exception as e:
+                print(f"Error creating reset token: {e}")
+                return None
+
+    def verify_reset_token(self, token: str) -> Optional[str]:
+        """Verify a reset token and return user_id if valid."""
+        if USE_POSTGRES:
+            try:
+                with get_db_connection() as conn:
+                    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                        cur.execute("""
+                            SELECT user_id, expires_at
+                            FROM password_reset_tokens
+                            WHERE token = %s AND used = false
+                        """, (token,))
+                        row = cur.fetchone()
+                        if row and row["expires_at"] > datetime.now():
+                            return row["user_id"]
+                        return None
+            except Exception as e:
+                print(f"Error verifying reset token: {e}")
+                return None
+        else:
+            tokens_file = "user_data/reset_tokens.json"
+            if not os.path.exists(tokens_file):
+                return None
+            with open(tokens_file, 'r') as f:
+                tokens = json.load(f)
+            token_data = tokens.get(token)
+            if token_data and not token_data["used"]:
+                if datetime.fromisoformat(token_data["expires_at"]) > datetime.now():
+                    return token_data["user_id"]
+            return None
+
+    def reset_password(self, token: str, new_password: str) -> Dict:
+        """Reset password using a valid token."""
+        # Validate new password
+        password_check = self.validate_password(new_password)
+        if not password_check["valid"]:
+            return {"success": False, "message": password_check["message"]}
+
+        user_id = self.verify_reset_token(token)
+        if not user_id:
+            return {"success": False, "message": "Invalid or expired reset link"}
+
+        new_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode('utf-8')
+
+        if USE_POSTGRES:
+            try:
+                with get_db_connection() as conn:
+                    with conn.cursor() as cur:
+                        # Update password
+                        cur.execute("""
+                            UPDATE users SET password_hash = %s WHERE user_id = %s
+                        """, (new_hash, user_id))
+
+                        # Mark token as used
+                        cur.execute("""
+                            UPDATE password_reset_tokens SET used = true WHERE token = %s
+                        """, (token,))
+                return {"success": True, "message": "Password updated successfully"}
+            except Exception as e:
+                print(f"Error resetting password: {e}")
+                return {"success": False, "message": "Database error"}
+        else:
+            # JSON fallback
+            users_file = "user_data/users.json"
+            tokens_file = "user_data/reset_tokens.json"
+            try:
+                with open(users_file, 'r') as f:
+                    users = json.load(f)
+
+                # Find and update user
+                for username, user in users.items():
+                    if user["user_id"] == user_id:
+                        users[username]["password_hash"] = new_hash
+                        break
+
+                with open(users_file, 'w') as f:
+                    json.dump(users, f, indent=2)
+
+                # Mark token as used
+                with open(tokens_file, 'r') as f:
+                    tokens = json.load(f)
+                tokens[token]["used"] = True
+                with open(tokens_file, 'w') as f:
+                    json.dump(tokens, f, indent=2)
+
+                return {"success": True, "message": "Password updated successfully"}
+            except Exception as e:
+                print(f"Error resetting password: {e}")
+                return {"success": False, "message": "Error updating password"}
+
+    def send_reset_email(self, email: str, reset_url: str) -> bool:
+        """Send password reset email via SendGrid."""
+        sendgrid_key = os.getenv("SENDGRID_API_KEY")
+        from_email = os.getenv("SENDGRID_FROM_EMAIL", "noreply@jimrohrcoach.com")
+
+        if not sendgrid_key:
+            print("⚠️ SENDGRID_API_KEY not set, cannot send reset email")
+            return False
+
+        try:
+            from sendgrid import SendGridAPIClient
+            from sendgrid.helpers.mail import Mail
+
+            message = Mail(
+                from_email=from_email,
+                to_emails=email,
+                subject="Reset Your Jim Rohn AI Coach Password",
+                html_content=f"""
+                <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <h2 style="color: #0b1220;">Reset Your Password</h2>
+                    <p>You requested to reset your password for Jim Rohn AI Coach.</p>
+                    <p>Click the button below to set a new password:</p>
+                    <p style="text-align: center; margin: 30px 0;">
+                        <a href="{reset_url}" style="background: linear-gradient(135deg, #06b6d4, #3b82f6); color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600;">Reset Password</a>
+                    </p>
+                    <p style="color: #666; font-size: 14px;">This link expires in 1 hour.</p>
+                    <p style="color: #666; font-size: 14px;">If you didn't request this, you can safely ignore this email.</p>
+                    <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;">
+                    <p style="color: #999; font-size: 12px;">Jim Rohn AI Coach - Your personal mentor for success & growth</p>
+                </div>
+                """
+            )
+
+            sg = SendGridAPIClient(sendgrid_key)
+            response = sg.send(message)
+            print(f"📧 Reset email sent to {email}, status: {response.status_code}")
+            return response.status_code in [200, 201, 202]
+        except Exception as e:
+            print(f"Error sending reset email: {e}")
+            traceback.print_exc()
+            return False
+
     def load_user_profile(self, user_id: str) -> Dict:
         """Load user profile."""
         default_profile = {
@@ -747,6 +993,50 @@ def logout():
     session.clear()
     return redirect(url_for('home'))
 
+@app.route('/forgot-password', methods=['POST'])
+def forgot_password():
+    """Send password reset email."""
+    data = request.json
+    email = data.get('email', '').strip().lower()
+
+    if not email:
+        return jsonify({"success": False, "message": "Email is required"})
+
+    user = coach.get_user_by_email(email)
+    # Always return success to prevent email enumeration
+    if not user:
+        return jsonify({"success": True, "message": "If an account exists with that email, you'll receive a reset link."})
+
+    token = coach.create_reset_token(user["user_id"])
+    if not token:
+        return jsonify({"success": False, "message": "Error creating reset token"})
+
+    # Build reset URL
+    reset_url = f"{request.host_url}reset-password/{token}"
+
+    if coach.send_reset_email(email, reset_url):
+        return jsonify({"success": True, "message": "If an account exists with that email, you'll receive a reset link."})
+    else:
+        return jsonify({"success": False, "message": "Unable to send email. Please try again later."})
+
+@app.route('/reset-password/<token>')
+def reset_password_page(token):
+    """Show password reset form."""
+    # Verify token is valid
+    user_id = coach.verify_reset_token(token)
+    if not user_id:
+        return render_template_string(RESET_PASSWORD_TEMPLATE, token=None, error="Invalid or expired reset link")
+    return render_template_string(RESET_PASSWORD_TEMPLATE, token=token, error=None)
+
+@app.route('/reset-password/<token>', methods=['POST'])
+def reset_password_submit(token):
+    """Process password reset."""
+    data = request.json
+    new_password = data.get('password', '')
+
+    result = coach.reset_password(token, new_password)
+    return jsonify(result)
+
 @app.route('/chat')
 def chat():
     """Chat interface for logged-in users."""
@@ -1205,6 +1495,149 @@ LOGIN_TEMPLATE = """
             text-decoration: underline;
         }
 
+        /* Forgot password link */
+        .forgot-link {
+            display: block;
+            margin-top: 8px;
+            color: #60a5fa;
+            font-size: 13px;
+            text-decoration: none;
+            text-align: right;
+        }
+
+        .forgot-link:hover {
+            text-decoration: underline;
+            color: #93c5fd;
+        }
+
+        /* Forgot password modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: rgba(22, 27, 34, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 28px;
+            width: 100%;
+            max-width: 380px;
+            animation: modalSlide 0.3s ease-out;
+        }
+
+        @keyframes modalSlide {
+            from { opacity: 0; transform: translateY(-20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .modal-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: #f4f4f5;
+            margin-bottom: 8px;
+        }
+
+        .modal-subtitle {
+            color: #8b949e;
+            font-size: 14px;
+            margin-bottom: 20px;
+            line-height: 1.5;
+        }
+
+        .modal-buttons {
+            display: flex;
+            gap: 12px;
+            margin-top: 20px;
+        }
+
+        .modal-btn {
+            flex: 1;
+            padding: 12px 16px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: none;
+        }
+
+        .modal-btn-secondary {
+            background: rgba(255, 255, 255, 0.08);
+            color: #c9d1d9;
+        }
+
+        .modal-btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.12);
+        }
+
+        .modal-btn-primary {
+            background: linear-gradient(135deg, rgba(6, 182, 212, 0.9) 0%, rgba(59, 130, 246, 0.9) 100%);
+            color: white;
+        }
+
+        .modal-btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(6, 182, 212, 0.3);
+        }
+
+        .modal-btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Password requirements */
+        .password-requirements {
+            margin-top: 10px;
+            padding: 12px;
+            background: rgba(9, 9, 11, 0.4);
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .req {
+            font-size: 12px;
+            color: #6e7681;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: color 0.2s ease;
+        }
+
+        .req:last-child {
+            margin-bottom: 0;
+        }
+
+        .req.met {
+            color: #4ade80;
+        }
+
+        .req.met .req-icon {
+            color: #4ade80;
+        }
+
+        .req-icon {
+            font-size: 10px;
+            width: 14px;
+            text-align: center;
+        }
+
         /* Decorative elements */
         .decoration {
             position: absolute;
@@ -1308,6 +1741,7 @@ LOGIN_TEMPLATE = """
                     <div class="form-group">
                         <label class="form-label" for="loginPassword">Password</label>
                         <input type="password" id="loginPassword" class="form-input" placeholder="Enter your password" required autocomplete="current-password">
+                        <a href="#" class="forgot-link" onclick="showForgotPassword(event)">Forgot password?</a>
                     </div>
                     <button type="submit" class="submit-btn">
                         <span class="btn-text">
@@ -1329,8 +1763,14 @@ LOGIN_TEMPLATE = """
                     <div class="form-group">
                         <label class="form-label" for="regPassword">Password</label>
                         <input type="password" id="regPassword" class="form-input" placeholder="Create a password" required autocomplete="new-password">
+                        <div class="password-requirements" id="passwordRequirements">
+                            <div class="req" id="req-length"><span class="req-icon">○</span> At least 8 characters</div>
+                            <div class="req" id="req-upper"><span class="req-icon">○</span> One uppercase letter</div>
+                            <div class="req" id="req-lower"><span class="req-icon">○</span> One lowercase letter</div>
+                            <div class="req" id="req-number"><span class="req-icon">○</span> One number</div>
+                        </div>
                     </div>
-                    <button type="submit" class="submit-btn">
+                    <button type="submit" class="submit-btn" id="registerBtn" disabled>
                         <span class="btn-text">
                             <span class="btn-label">Create Account</span>
                             <span class="spinner"></span>
@@ -1341,6 +1781,22 @@ LOGIN_TEMPLATE = """
 
             <div class="footer-text">
                 Your personal AI mentor for success & growth
+            </div>
+        </div>
+    </div>
+
+    <!-- Forgot Password Modal -->
+    <div class="modal-overlay" id="forgotModal">
+        <div class="modal-content">
+            <h3 class="modal-title">Reset Password</h3>
+            <p class="modal-subtitle">Enter your email address and we'll send you a link to reset your password.</p>
+            <div id="forgotMessageBox" class="message" style="display: none;"></div>
+            <div class="form-group" style="margin-bottom: 0;">
+                <input type="email" id="forgotEmail" class="form-input" placeholder="Enter your email address" required>
+            </div>
+            <div class="modal-buttons">
+                <button class="modal-btn modal-btn-secondary" onclick="hideForgotPassword()">Cancel</button>
+                <button class="modal-btn modal-btn-primary" id="sendResetBtn" onclick="sendResetEmail()">Send Reset Link</button>
             </div>
         </div>
     </div>
@@ -1384,6 +1840,74 @@ LOGIN_TEMPLATE = """
             tabs[1].classList.add('active');
             hideMessage();
         }
+
+        // Forgot password functions
+        const forgotModal = document.getElementById('forgotModal');
+        const forgotEmail = document.getElementById('forgotEmail');
+        const forgotMessageBox = document.getElementById('forgotMessageBox');
+        const sendResetBtn = document.getElementById('sendResetBtn');
+
+        function showForgotPassword(e) {
+            e.preventDefault();
+            forgotModal.classList.add('active');
+            forgotEmail.value = '';
+            forgotMessageBox.style.display = 'none';
+            setTimeout(() => forgotEmail.focus(), 100);
+        }
+
+        function hideForgotPassword() {
+            forgotModal.classList.remove('active');
+        }
+
+        async function sendResetEmail() {
+            const email = forgotEmail.value.trim();
+            if (!email) {
+                forgotMessageBox.textContent = 'Please enter your email address';
+                forgotMessageBox.className = 'message error';
+                forgotMessageBox.style.display = 'block';
+                return;
+            }
+
+            sendResetBtn.disabled = true;
+            sendResetBtn.textContent = 'Sending...';
+
+            try {
+                const response = await fetch('/forgot-password', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: email })
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    forgotMessageBox.textContent = result.message;
+                    forgotMessageBox.className = 'message success';
+                    forgotMessageBox.style.display = 'block';
+                    setTimeout(() => hideForgotPassword(), 3000);
+                } else {
+                    forgotMessageBox.textContent = result.message || 'Error sending reset email';
+                    forgotMessageBox.className = 'message error';
+                    forgotMessageBox.style.display = 'block';
+                }
+            } catch (error) {
+                forgotMessageBox.textContent = 'Connection error. Please try again.';
+                forgotMessageBox.className = 'message error';
+                forgotMessageBox.style.display = 'block';
+            }
+
+            sendResetBtn.disabled = false;
+            sendResetBtn.textContent = 'Send Reset Link';
+        }
+
+        // Handle Enter key in forgot email field
+        forgotEmail.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') sendResetEmail();
+        });
+
+        // Close modal on overlay click
+        forgotModal.addEventListener('click', (e) => {
+            if (e.target === forgotModal) hideForgotPassword();
+        });
 
         function setLoading(form, loading) {
             const btn = form.querySelector('.submit-btn');
@@ -1465,14 +1989,328 @@ LOGIN_TEMPLATE = """
             }
         });
 
+        // Password validation
+        const regPassword = document.getElementById('regPassword');
+        const registerBtn = document.getElementById('registerBtn');
+        const requirements = {
+            length: document.getElementById('req-length'),
+            upper: document.getElementById('req-upper'),
+            lower: document.getElementById('req-lower'),
+            number: document.getElementById('req-number')
+        };
+
+        function validatePassword(password) {
+            const checks = {
+                length: password.length >= 8,
+                upper: /[A-Z]/.test(password),
+                lower: /[a-z]/.test(password),
+                number: /[0-9]/.test(password)
+            };
+
+            for (const [key, passed] of Object.entries(checks)) {
+                const el = requirements[key];
+                if (passed) {
+                    el.classList.add('met');
+                    el.querySelector('.req-icon').textContent = '✓';
+                } else {
+                    el.classList.remove('met');
+                    el.querySelector('.req-icon').textContent = '○';
+                }
+            }
+
+            const allPassed = Object.values(checks).every(Boolean);
+            registerBtn.disabled = !allPassed;
+            return allPassed;
+        }
+
+        regPassword.addEventListener('input', (e) => {
+            validatePassword(e.target.value);
+        });
+
         // Handle Enter key in password fields
         document.getElementById('loginPassword').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') loginForm.requestSubmit();
         });
-        document.getElementById('regPassword').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') registerForm.requestSubmit();
+        regPassword.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !registerBtn.disabled) registerForm.requestSubmit();
         });
     </script>
+</body>
+</html>
+"""
+
+RESET_PASSWORD_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reset Password - Jim Rohn AI Coach</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+            background: linear-gradient(135deg, #0b1220 0%, #0d1525 50%, #0a0f1a 100%);
+            color: #f4f4f5;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .reset-container {
+            width: 100%;
+            max-width: 420px;
+        }
+        .reset-card {
+            background: rgba(22, 27, 34, 0.85);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 24px;
+            padding: 40px 36px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+        }
+        .logo-section {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+        .logo-icon { font-size: 48px; margin-bottom: 16px; display: block; }
+        .logo-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #f4f4f5;
+            margin-bottom: 8px;
+        }
+        .logo-subtitle {
+            color: #8b949e;
+            font-size: 0.9rem;
+        }
+        .form-group { margin-bottom: 20px; }
+        .form-label {
+            display: block;
+            color: #c9d1d9;
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+        .form-input {
+            width: 100%;
+            padding: 14px 16px;
+            background: rgba(9, 9, 11, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            font-size: 15px;
+            color: #f4f4f5;
+            font-family: inherit;
+            transition: all 0.2s ease;
+        }
+        .form-input::placeholder { color: #6e7681; }
+        .form-input:focus {
+            outline: none;
+            border-color: rgba(6, 182, 212, 0.5);
+            background: rgba(9, 9, 11, 0.8);
+            box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.1);
+        }
+        .password-requirements {
+            margin-top: 10px;
+            padding: 12px;
+            background: rgba(9, 9, 11, 0.4);
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+        .req {
+            font-size: 12px;
+            color: #6e7681;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .req:last-child { margin-bottom: 0; }
+        .req.met { color: #4ade80; }
+        .req-icon { font-size: 10px; width: 14px; text-align: center; }
+        .submit-btn {
+            width: 100%;
+            padding: 14px 24px;
+            background: linear-gradient(135deg, rgba(6, 182, 212, 0.9) 0%, rgba(59, 130, 246, 0.9) 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            margin-top: 8px;
+        }
+        .submit-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px -8px rgba(6, 182, 212, 0.5);
+        }
+        .submit-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .message {
+            padding: 12px 16px;
+            border-radius: 10px;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+        .message.error {
+            background: rgba(220, 53, 69, 0.15);
+            border: 1px solid rgba(220, 53, 69, 0.3);
+            color: #f87171;
+        }
+        .message.success {
+            background: rgba(34, 197, 94, 0.15);
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            color: #4ade80;
+        }
+        .back-link {
+            display: block;
+            text-align: center;
+            margin-top: 20px;
+            color: #60a5fa;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .back-link:hover { text-decoration: underline; }
+        @media (max-width: 480px) {
+            body { padding: 16px; }
+            .reset-card { padding: 32px 24px; border-radius: 20px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="reset-container">
+        <div class="reset-card">
+            <div class="logo-section">
+                <span class="logo-icon">🔐</span>
+                <h1 class="logo-title">Reset Password</h1>
+                <p class="logo-subtitle">{% if error %}{{ error }}{% else %}Create a new password for your account{% endif %}</p>
+            </div>
+
+            {% if token %}
+            <div id="messageBox" class="message" style="display: none;"></div>
+
+            <form id="resetForm">
+                <div class="form-group">
+                    <label class="form-label" for="newPassword">New Password</label>
+                    <input type="password" id="newPassword" class="form-input" placeholder="Enter new password" required autocomplete="new-password">
+                    <div class="password-requirements">
+                        <div class="req" id="req-length"><span class="req-icon">○</span> At least 8 characters</div>
+                        <div class="req" id="req-upper"><span class="req-icon">○</span> One uppercase letter</div>
+                        <div class="req" id="req-lower"><span class="req-icon">○</span> One lowercase letter</div>
+                        <div class="req" id="req-number"><span class="req-icon">○</span> One number</div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label" for="confirmPassword">Confirm Password</label>
+                    <input type="password" id="confirmPassword" class="form-input" placeholder="Confirm new password" required>
+                </div>
+                <button type="submit" class="submit-btn" id="resetBtn" disabled>Reset Password</button>
+            </form>
+            {% endif %}
+
+            <a href="/" class="back-link">← Back to Login</a>
+        </div>
+    </div>
+
+    {% if token %}
+    <script>
+        const form = document.getElementById('resetForm');
+        const newPassword = document.getElementById('newPassword');
+        const confirmPassword = document.getElementById('confirmPassword');
+        const resetBtn = document.getElementById('resetBtn');
+        const messageBox = document.getElementById('messageBox');
+
+        const requirements = {
+            length: document.getElementById('req-length'),
+            upper: document.getElementById('req-upper'),
+            lower: document.getElementById('req-lower'),
+            number: document.getElementById('req-number')
+        };
+
+        let passwordValid = false;
+
+        function validatePassword(password) {
+            const checks = {
+                length: password.length >= 8,
+                upper: /[A-Z]/.test(password),
+                lower: /[a-z]/.test(password),
+                number: /[0-9]/.test(password)
+            };
+
+            for (const [key, passed] of Object.entries(checks)) {
+                const el = requirements[key];
+                if (passed) {
+                    el.classList.add('met');
+                    el.querySelector('.req-icon').textContent = '✓';
+                } else {
+                    el.classList.remove('met');
+                    el.querySelector('.req-icon').textContent = '○';
+                }
+            }
+
+            passwordValid = Object.values(checks).every(Boolean);
+            updateButton();
+        }
+
+        function updateButton() {
+            const matches = newPassword.value === confirmPassword.value && confirmPassword.value.length > 0;
+            resetBtn.disabled = !(passwordValid && matches);
+        }
+
+        newPassword.addEventListener('input', (e) => validatePassword(e.target.value));
+        confirmPassword.addEventListener('input', updateButton);
+
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            if (newPassword.value !== confirmPassword.value) {
+                messageBox.textContent = 'Passwords do not match';
+                messageBox.className = 'message error';
+                messageBox.style.display = 'block';
+                return;
+            }
+
+            resetBtn.disabled = true;
+            resetBtn.textContent = 'Resetting...';
+
+            try {
+                const response = await fetch('/reset-password/{{ token }}', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: newPassword.value })
+                });
+                const result = await response.json();
+
+                if (result.success) {
+                    messageBox.textContent = 'Password reset successfully! Redirecting to login...';
+                    messageBox.className = 'message success';
+                    messageBox.style.display = 'block';
+                    setTimeout(() => window.location.href = '/', 2000);
+                } else {
+                    messageBox.textContent = result.message || 'Error resetting password';
+                    messageBox.className = 'message error';
+                    messageBox.style.display = 'block';
+                    resetBtn.disabled = false;
+                    resetBtn.textContent = 'Reset Password';
+                }
+            } catch (error) {
+                messageBox.textContent = 'Connection error. Please try again.';
+                messageBox.className = 'message error';
+                messageBox.style.display = 'block';
+                resetBtn.disabled = false;
+                resetBtn.textContent = 'Reset Password';
+            }
+        });
+    </script>
+    {% endif %}
 </body>
 </html>
 """
