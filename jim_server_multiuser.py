@@ -1725,7 +1725,6 @@ LOGIN_TEMPLATE = """
 
         <div class="login-card">
             <div class="logo-section">
-                <span class="logo-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></span>
                 <h1 class="logo-title">Jim Rohn AI Coach</h1>
                 <p class="logo-subtitle">"Success is doing ordinary things extraordinarily well."</p>
             </div>
@@ -4195,16 +4194,18 @@ CHAT_TEMPLATE = """
                 top: 50%;
                 left: 50%;
                 transform: translate(-50%, -50%);
-                background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
-                color: white;
-                border: none;
+                background: rgba(22, 27, 34, 0.95);
+                backdrop-filter: blur(20px);
+                -webkit-backdrop-filter: blur(20px);
+                color: #f4f4f5;
+                border: 1px solid rgba(6, 182, 212, 0.3);
                 padding: 20px 30px;
                 border-radius: 15px;
                 font-size: 18px;
-                font-weight: bold;
+                font-weight: 600;
                 cursor: pointer;
                 z-index: 2000;
-                box-shadow: 0 8px 20px rgba(220, 53, 69, 0.3);
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(6, 182, 212, 0.1);
                 animation: pulse 2s infinite;
             `;
 
