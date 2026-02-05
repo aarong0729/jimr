@@ -1725,7 +1725,7 @@ LOGIN_TEMPLATE = """
 
         <div class="login-card">
             <div class="logo-section">
-                <span class="logo-icon">🧠</span>
+                <span class="logo-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg></span>
                 <h1 class="logo-title">Jim Rohn AI Coach</h1>
                 <p class="logo-subtitle">"Success is doing ordinary things extraordinarily well."</p>
             </div>
@@ -3527,7 +3527,7 @@ CHAT_TEMPLATE = """
                 <div class="sidebar-title">Recent Conversations</div>
                 <div class="sidebar-filters">
                     <button class="filter-btn active" id="filterAll" onclick="setFilter('all')">All</button>
-                    <button class="filter-btn" id="filterFavorites" onclick="setFilter('favorites')">⭐ Favorites</button>
+                    <button class="filter-btn" id="filterFavorites" onclick="setFilter('favorites')"><svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg> Favorites</button>
                 </div>
             </div>
 
@@ -3551,7 +3551,7 @@ CHAT_TEMPLATE = """
                     <div class="main-subtitle">"Success is neither magical nor mysterious. Success is the natural consequence of consistently applying basic fundamentals."</div>
                 </div>
                 <div class="header-buttons">
-                    <button class="memory-btn" onclick="showProfile()">🧠 My Memory</button>
+                    <button class="memory-btn" onclick="showProfile()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> My Memory</button>
                     <a href="/logout" class="logout-btn">Logout</a>
                 </div>
                 <!-- Mobile Menu Button -->
@@ -3571,15 +3571,15 @@ CHAT_TEMPLATE = """
                 </div>
                 <div class="mobile-drawer-content">
                     <div class="mobile-menu-item memory-item" onclick="showProfile(); closeMobileMenu();">
-                        <span class="mobile-menu-icon">🧠</span>
+                        <span class="mobile-menu-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
                         <span>My Memory</span>
                     </div>
                     <div class="mobile-menu-item history-item" onclick="showHistory(); closeMobileMenu();">
-                        <span class="mobile-menu-icon">📜</span>
+                        <span class="mobile-menu-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
                         <span>Conversation History</span>
                     </div>
                     <a href="/logout" class="mobile-menu-item logout-item">
-                        <span class="mobile-menu-icon">🚪</span>
+                        <span class="mobile-menu-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></span>
                         <span>Logout</span>
                     </a>
                 </div>
@@ -3676,7 +3676,7 @@ CHAT_TEMPLATE = """
         <div class="modal-content">
             <span class="close" onclick="closeProfile()">&times;</span>
             <div class="profile-header">
-                <h2>🧠 What Jim Remembers About You</h2>
+                <h2><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 8px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>What Jim Remembers About You</h2>
             </div>
             <div id="profileContent">
                 <p>Loading your profile...</p>
@@ -3692,6 +3692,10 @@ CHAT_TEMPLATE = """
         let audioUnlocked = false;
         let currentFilter = 'all';
         let allConversations = [];
+
+        // SVG icon constants for minimal design
+        const STAR_FILLED = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
+        const STAR_EMPTY = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>';
 
         // Set filter for sidebar
         function setFilter(filter) {
@@ -3753,7 +3757,7 @@ CHAT_TEMPLATE = """
             if (currentFilter === 'favorites') {
                 filtered = conversations.filter(c => c.is_favorite);
                 if (filtered.length === 0) {
-                    container.innerHTML = '<div class="conversation-item"><div class="conversation-question">No favorites yet</div><div class="conversation-meta">Click ⭐ to add favorites</div></div>';
+                    container.innerHTML = '<div class="conversation-item"><div class="conversation-question">No favorites yet</div><div class="conversation-meta">Click the star to add favorites</div></div>';
                     return;
                 }
             }
@@ -3775,7 +3779,7 @@ CHAT_TEMPLATE = """
                     ? conv.question.substring(0, 50) + '...'
                     : conv.question;
                 const isFav = conv.is_favorite ? 'active' : '';
-                const starIcon = conv.is_favorite ? '⭐' : '☆';
+                const starIcon = conv.is_favorite ? STAR_FILLED : STAR_EMPTY;
 
                 html += `<div class="conversation-item" onclick="openConversationInHistory('${conv.timestamp}')">`;
                 html += `<button class="favorite-toggle ${isFav}" onclick="toggleFavorite('${conv.timestamp}', event)" title="Toggle favorite">${starIcon}</button>`;
@@ -3922,7 +3926,7 @@ CHAT_TEMPLATE = """
                             const isLong = conversation.response.length > 200;
                             const truncatedResponse = isLong ? conversation.response.substring(0, 200) : conversation.response;
                             const isFavorite = conversation.is_favorite || false;
-                            const starIcon = isFavorite ? '⭐' : '☆';
+                            const starIcon = isFavorite ? STAR_FILLED : STAR_EMPTY;
                             const favClass = isFavorite ? 'active' : '';
 
                             html += `<div class="history-conversation" onclick="toggleConversation(${index})">`;
@@ -4143,7 +4147,7 @@ CHAT_TEMPLATE = """
                 if (data.success) {
                     // Update button appearance
                     const btn = event.target;
-                    btn.textContent = data.is_favorite ? '⭐' : '☆';
+                    btn.innerHTML = data.is_favorite ? STAR_FILLED : STAR_EMPTY;
                     btn.classList.toggle('active', data.is_favorite);
                     // Update local data
                     if (conversationsData[index]) {
@@ -4185,7 +4189,7 @@ CHAT_TEMPLATE = """
 
             const button = document.createElement('button');
             button.id = 'audioUnlockButton';
-            button.innerHTML = '🔊 Click to Enable Jim\\'s Voice';
+            button.innerHTML = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 8px;"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg> Click to Enable Jim\\'s Voice';
             button.style.cssText = `
                 position: fixed;
                 top: 50%;
@@ -4387,7 +4391,7 @@ CHAT_TEMPLATE = """
                             await playAudio(data.audio);
                             // Add audio indicator to message
                             const audioIcon = document.createElement('span');
-                            audioIcon.innerHTML = ' 🔊';
+                            audioIcon.innerHTML = ' <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>';
                             audioIcon.style.color = '#28a745';
                             audioIcon.title = 'Audio response available';
                             messageElement.querySelector('.message-header').appendChild(audioIcon);
