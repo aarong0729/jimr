@@ -2416,18 +2416,21 @@ CHAT_TEMPLATE = """
             border: none;
             cursor: pointer;
             font-size: 14px;
-            opacity: 0.4;
+            opacity: 0.5;
             transition: all 0.2s ease;
             padding: 4px;
+            color: #8b949e;
         }
 
         .favorite-toggle:hover {
             opacity: 1;
             transform: translateY(-50%) scale(1.2);
+            color: #06b6d4;
         }
 
         .favorite-toggle.active {
             opacity: 1;
+            color: #06b6d4;
         }
 
         .conversation-list {
