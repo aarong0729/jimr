@@ -149,7 +149,7 @@ class MultiUserJimCoach:
 
         # Load admin config
         self.admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
-        
+
         # Load system prompt
         try:
             with open('System prompt.txt', 'r') as f:
@@ -157,6 +157,127 @@ class MultiUserJimCoach:
         except FileNotFoundError:
             self.system_prompt = """You are Jim Rohn, the legendary personal development speaker and mentor.
             Respond with wisdom, warmth, and practical advice in your distinctive style."""
+
+        # Load knowledge base
+        self.kb_chunks = []
+        self.kb_embeddings = None
+        self._load_knowledge_base()
+
+    def _load_knowledge_base(self):
+        """Load all Jim Rohn materials and build embeddings."""
+        import numpy as np
+
+        materials_dir = './jim_rohn_materials'
+        cache_file = './kb_cache.json'
+
+        if not os.path.exists(materials_dir):
+            print("⚠️ No jim_rohn_materials directory found")
+            return
+
+        # Load all text files from subdirectories
+        chunks = []
+        for subdir in ['books', 'seminars', 'transcripts']:
+            dir_path = os.path.join(materials_dir, subdir)
+            if not os.path.exists(dir_path):
+                continue
+            for filename in os.listdir(dir_path):
+                if not filename.endswith('.txt'):
+                    continue
+                filepath = os.path.join(dir_path, filename)
+                try:
+                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                        text = f.read()
+
+                    # Split into chunks (~500 chars with overlap)
+                    source = f"{subdir}/{filename}"
+                    for i in range(0, len(text), 400):
+                        chunk = text[i:i+500].strip()
+                        if len(chunk) > 50:  # Skip tiny chunks
+                            chunks.append({"text": chunk, "source": source})
+                except Exception as e:
+                    print(f"⚠️ Error reading {filepath}: {e}")
+
+        if not chunks:
+            print("⚠️ No knowledge base content found")
+            return
+
+        self.kb_chunks = chunks
+        print(f"📚 Loaded {len(chunks)} KB chunks from {materials_dir}")
+
+        # Check cache
+        try:
+            if os.path.exists(cache_file):
+                with open(cache_file, 'r') as f:
+                    cache = json.load(f)
+                if cache.get('chunk_count') == len(chunks):
+                    self.kb_embeddings = np.array(cache['embeddings'])
+                    print(f"📚 Loaded cached embeddings ({len(chunks)} chunks)")
+                    return
+        except Exception:
+            pass
+
+        # Generate embeddings via OpenAI
+        print(f"📚 Generating embeddings for {len(chunks)} chunks...")
+        try:
+            # Process in batches of 100
+            all_embeddings = []
+            for i in range(0, len(chunks), 100):
+                batch = [c['text'] for c in chunks[i:i+100]]
+                response = self.openai_client.embeddings.create(
+                    model="text-embedding-3-small",
+                    input=batch
+                )
+                for item in response.data:
+                    all_embeddings.append(item.embedding)
+
+            self.kb_embeddings = np.array(all_embeddings)
+
+            # Cache to disk
+            with open(cache_file, 'w') as f:
+                json.dump({
+                    'chunk_count': len(chunks),
+                    'embeddings': [e.tolist() for e in self.kb_embeddings]
+                }, f)
+            print(f"📚 Embeddings generated and cached ({len(chunks)} chunks)")
+        except Exception as e:
+            print(f"⚠️ Error generating embeddings: {e}")
+            traceback.print_exc()
+
+    def search_knowledge_base(self, query: str, top_k: int = 3) -> str:
+        """Search KB for relevant content and return formatted excerpts."""
+        import numpy as np
+
+        if self.kb_embeddings is None or len(self.kb_chunks) == 0:
+            return ""
+
+        try:
+            # Embed the query
+            response = self.openai_client.embeddings.create(
+                model="text-embedding-3-small",
+                input=[query]
+            )
+            query_embedding = np.array(response.data[0].embedding)
+
+            # Cosine similarity
+            similarities = np.dot(self.kb_embeddings, query_embedding) / (
+                np.linalg.norm(self.kb_embeddings, axis=1) * np.linalg.norm(query_embedding)
+            )
+
+            # Get top-k results
+            top_indices = np.argsort(similarities)[-top_k:][::-1]
+
+            excerpts = []
+            for idx in top_indices:
+                if similarities[idx] > 0.3:  # Minimum relevance threshold
+                    chunk = self.kb_chunks[idx]
+                    excerpts.append(f"[From {chunk['source']}]\n{chunk['text']}")
+
+            if excerpts:
+                return "\n\n".join(excerpts)
+            return ""
+        except Exception as e:
+            print(f"⚠️ KB search error: {e}")
+            return ""
         
     def validate_password(self, password: str) -> Dict:
         """Validate password meets policy requirements."""
@@ -781,9 +902,16 @@ class MultiUserJimCoach:
         try:
             # Get conversation context from user's memory
             context = self.get_conversation_context(user_id, question)
-            
-            # Build enhanced system prompt with memory context
+
+            # Search knowledge base for relevant content
+            kb_content = self.search_knowledge_base(question)
+
+            # Build enhanced system prompt with KB + memory context
             enhanced_prompt = self.system_prompt
+
+            if kb_content:
+                enhanced_prompt += f"\n\n=== JIM ROHN'S OWN WORDS (from speeches/books) ===\n{kb_content}\n\nDraw from these actual quotes and teachings when relevant. Weave Jim's real words naturally into your response."
+
             if context:
                 enhanced_prompt += f"\n\n=== MEMORY CONTEXT ===\n{context}\n\nUse this context to provide more personalized advice. Reference past conversations when relevant, but don't make it obvious unless it naturally fits the conversation."
 
@@ -1154,26 +1282,23 @@ def admin_stats():
 
 @app.route('/admin/update_rag', methods=['POST'])
 def admin_update_rag():
-    """Update RAG knowledge base."""
+    """Update knowledge base embeddings."""
     password = request.form.get('password')
     if password != coach.admin_password:
         return jsonify({"error": "Invalid admin password"})
-    
-    # Run the RAG update script
+
     try:
-        from jim_rohn_system import JimRohnCoach
-        import shutil
-        
-        # Delete existing database to force rebuild
-        if os.path.exists('./jim_knowledge_db'):
-            shutil.rmtree('./jim_knowledge_db')
-        
-        # Initialize coach (this will trigger setup_knowledge_base)
-        rag_coach = JimRohnCoach('./jim_rohn_materials')
-        
-        return jsonify({"success": True, "message": "RAG database updated successfully"})
+        # Delete cached embeddings to force rebuild
+        if os.path.exists('./kb_cache.json'):
+            os.remove('./kb_cache.json')
+
+        # Reload knowledge base with fresh embeddings
+        coach._load_knowledge_base()
+
+        chunk_count = len(coach.kb_chunks)
+        return jsonify({"success": True, "message": f"Knowledge base updated: {chunk_count} chunks indexed"})
     except Exception as e:
-        return jsonify({"error": f"Failed to update RAG: {str(e)}"})
+        return jsonify({"error": f"Failed to update KB: {str(e)}"})
 
 # Templates
 LOGIN_TEMPLATE = """
